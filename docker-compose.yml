@@ -1,0 +1,166 @@
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # Infrastructure Services
+  # ==========================================================================
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: saiv-postgres
+    environment:
+      POSTGRES_USER: saiv
+      POSTGRES_PASSWORD: saiv_password
+      POSTGRES_DB: saiv
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saiv"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - saiv-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: saiv-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - saiv-network
+
+  # ==========================================================================
+  # Application Services (Students implement these)
+  # ==========================================================================
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: saiv-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://saiv:saiv_password@postgres:5432/saiv
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: your-secret-key-change-in-production
+      FACE_SERVICE_URL: http://face-recognition:8001
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - saiv-network
+
+  face-recognition:
+    build:
+      context: ./face-service
+      dockerfile: Dockerfile
+    container_name: saiv-face-recognition
+    ports:
+      - "8001:8001"
+    environment:
+      REDIS_URL: redis://redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - saiv-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: saiv-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_FACE_SERVICE_URL: http://localhost:8001
+    depends_on:
+      - backend
+    networks:
+      - saiv-network
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: saiv-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      DATABASE_URL: postgresql://saiv:saiv_password@postgres:5432/saiv
+      BACKEND_URL: http://backend:8000
+      PROMETHEUS_URL: http://prometheus:9090
+    depends_on:
+      - backend
+      - prometheus
+    networks:
+      - saiv-network
+
+  # ==========================================================================
+  # Observability Services
+  # ==========================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: saiv-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./dashboard/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - saiv-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: saiv-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./dashboard/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    networks:
+      - saiv-network
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: saiv-otel-collector
+    ports:
+      - "4317:4317"   # gRPC
+      - "4318:4318"   # HTTP
+    volumes:
+      - ./dashboard/otel-collector-config.yml:/etc/otel/config.yaml
+    command: ["--config=/etc/otel/config.yaml"]
+    networks:
+      - saiv-network
+
+networks:
+  saiv-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
