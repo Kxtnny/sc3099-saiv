@@ -8,6 +8,7 @@ longer maintained. Parameters follow docs/SECURITY-REQUIREMENTS.md
 """
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -63,6 +64,10 @@ def _create_token(
     payload: Dict[str, Any] = {
         "sub": str(subject),
         "type": token_type,
+        # Unique token id. iat/exp have second granularity, so without this
+        # two tokens minted for the same user in the same second would be
+        # byte-identical. It also gives us a handle for future revocation.
+        "jti": uuid.uuid4().hex,
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
     }

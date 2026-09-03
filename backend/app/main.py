@@ -18,6 +18,7 @@ from app import __version__
 from app.core.config import settings
 from app.core.database import check_database, init_db, wait_for_database
 from app.core.redis_client import check_redis, close_redis
+from app.routers import auth, users
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -97,8 +98,8 @@ def root():
 # =============================================================================
 # Routers (mounted as each is implemented)
 # =============================================================================
-# from app.routers import auth, users, courses, sessions, checkins, devices, \
-#     enrollments, stats, audit, export, admin
-#
-# app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
-# ...
+app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
+app.include_router(users.router, prefix=settings.API_V1_PREFIX)
+
+# Still to come: courses, sessions, checkins, devices, enrollments, stats,
+# audit, export, admin.
