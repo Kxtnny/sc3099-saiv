@@ -72,6 +72,45 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     logger.info("Database schema ready (%s tables)", len(Base.metadata.tables))
+    enforce_audit_immutability()
+
+
+# Postgres triggers that make audit_logs append-only. Application code has no
+# update or delete path, but this holds even for someone with a psql prompt.
+_AUDIT_GUARD_FUNCTION = """
+CREATE OR REPLACE FUNCTION saiv_audit_logs_guard() RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_logs is append-only: % is not permitted', TG_OP
+        USING ERRCODE = 'insufficient_privilege';
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+_AUDIT_GUARD_TRIGGERS = [
+    "DROP TRIGGER IF EXISTS audit_logs_no_update_delete ON audit_logs",
+    "CREATE TRIGGER audit_logs_no_update_delete "
+    "BEFORE UPDATE OR DELETE ON audit_logs "
+    "FOR EACH ROW EXECUTE FUNCTION saiv_audit_logs_guard()",
+    "DROP TRIGGER IF EXISTS audit_logs_no_truncate ON audit_logs",
+    "CREATE TRIGGER audit_logs_no_truncate "
+    "BEFORE TRUNCATE ON audit_logs "
+    "FOR EACH STATEMENT EXECUTE FUNCTION saiv_audit_logs_guard()",
+]
+
+
+def enforce_audit_immutability() -> None:
+    """Install the append-only guard on audit_logs (PostgreSQL only)."""
+    if engine.dialect.name != "postgresql":
+        logger.warning("Audit immutability trigger skipped: not PostgreSQL")
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(_AUDIT_GUARD_FUNCTION))
+            for statement in _AUDIT_GUARD_TRIGGERS:
+                conn.execute(text(statement))
+        logger.info("audit_logs append-only guard installed")
+    except Exception as exc:  # noqa: BLE001 - never block startup on this
+        logger.error("Could not install audit_logs guard: %s", exc)
 
 
 def check_database() -> bool:

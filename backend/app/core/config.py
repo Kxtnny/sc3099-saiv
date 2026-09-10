@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6380/0"
     FACE_SERVICE_URL: str = "http://localhost:8001"
 
+    # Face service call budgets. The check-in path is tighter because the
+    # whole request must finish well inside 2 seconds.
+    FACE_SERVICE_TIMEOUT: float = 5.0
+    FACE_CHECKIN_TIMEOUT: float = 1.5
+    # Optional second opinion from the face service risk engine (network /
+    # VPN signals). Short budget so it can never push a check-in past 2s.
+    FACE_RISK_ASSESS_ENABLED: bool = True
+    FACE_RISK_TIMEOUT: float = 0.75
+    # After a connection failure, skip face-service calls on the check-in
+    # path for this long instead of paying the DNS/connect cost every time.
+    FACE_SERVICE_COOLDOWN_SECONDS: int = 30
+
     # Connection pool (DATABASE-SCHEMA.md: size=10, max_overflow=20)
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
@@ -45,6 +57,8 @@ class Settings(BaseSettings):
 
     # -- Risk scoring --------------------------------------------------------
     RISK_SCORE_THRESHOLD: float = 0.5
+    # CRITICAL band (SECURITY-REQUIREMENTS.md): auto-reject at or above this.
+    RISK_REJECT_THRESHOLD: float = 0.7
     LIVENESS_THRESHOLD: float = 0.6
     FACE_MATCH_THRESHOLD: float = 0.7
     DEFAULT_GEOFENCE_RADIUS_METERS: float = 100.0
@@ -55,13 +69,22 @@ class Settings(BaseSettings):
     # production values would fail the suite. Defaults here are permissive for
     # development; tighten them via environment variables to demo the feature.
     RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_LOGIN_PER_HOUR: int = 60
+    RATE_LIMIT_LOGIN_PER_HOUR: int = 60          # failed attempts per IP
     RATE_LIMIT_API_PER_HOUR: int = 1000
     RATE_LIMIT_CHECKIN_PER_MINUTE: int = 10
     RATE_LIMIT_REGISTER_PER_HOUR: int = 1000
 
     # -- Data retention ------------------------------------------------------
     DATA_RETENTION_DAYS: int = 30
+    # Background sweep that scrubs records past scheduled_deletion_at.
+    RETENTION_SWEEP_ENABLED: bool = True
+    RETENTION_SWEEP_INTERVAL_SECONDS: int = 3600
+
+    # -- Sessions ------------------------------------------------------------
+    # Rotating QR codes for replay prevention; how long one stays valid.
+    QR_CODE_TTL_SECONDS: int = 300
+    # Tolerance when validating that a new session starts in the future.
+    SESSION_START_GRACE_SECONDS: int = 300
 
     # -- CORS ----------------------------------------------------------------
     # Comma-separated list; parsed by the cors_origins property below.
@@ -71,10 +94,6 @@ class Settings(BaseSettings):
     def cors_origins(self) -> List[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
-    @property
-    def face_service_timeout(self) -> float:
-        """Keep short: check-in must complete in under 2 seconds."""
-        return 3.0
 
 
 @lru_cache

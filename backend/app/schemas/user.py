@@ -103,6 +103,8 @@ class UserResponse(BaseModel):
     created_at: UTCDateTime
     updated_at: Optional[UTCDateTime] = None
     last_login_at: Optional[UTCDateTime] = None
+    # Retention tracking: set when deletion is requested, cleared once purged.
+    scheduled_deletion_at: Optional[UTCDateTime] = None
 
 
 class TokenResponse(BaseModel):
@@ -122,3 +124,16 @@ class TokenRefreshResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+
+
+class FaceEnrollRequest(BaseModel):
+    """Base64-encoded frame, held in memory only."""
+
+    image: str = Field(min_length=1)
+
+
+class FaceEnrollResponse(BaseModel):
+    success: bool
+    message: str
+    face_enrolled: bool
+    quality_score: Optional[float] = None

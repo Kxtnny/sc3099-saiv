@@ -21,7 +21,14 @@ from app.dependencies import get_current_user, is_staff, paginate, require_admin
 from app.enums import AuditAction, UserRole
 from app.models import Course, Enrollment, User
 from app.schemas.common import PaginatedResponse
-from app.schemas.user import UserAdminUpdate, UserResponse, UserUpdate
+from app.schemas.user import (
+    FaceEnrollRequest,
+    FaceEnrollResponse,
+    UserAdminUpdate,
+    UserResponse,
+    UserUpdate,
+)
+from app.services import face_client
 from app.services.audit import log_action
 
 logger = logging.getLogger(__name__)
@@ -234,3 +241,73 @@ def delete_user(
     )
     db.commit()
     return None
+
+
+# =============================================================================
+# Face enrollment (Module 3 integration)
+# =============================================================================
+
+@router.post("/me/face/enroll", response_model=FaceEnrollResponse)
+def enroll_face(
+    payload: FaceEnrollRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Enrol the caller's face for later verification.
+
+    PRIVACY: the image is forwarded to the face service, which returns a
+    SHA-256 template hash. Only that 64-character hash is stored - the image is
+    never written to disk, the database, or the logs.
+    """
+    if not current_user.camera_consent:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Camera consent is required before face enrollment",
+        )
+
+    try:
+        result = face_client.enroll_face(
+            current_user.id, payload.image, current_user.camera_consent
+        )
+    except face_client.FaceServiceUnavailable:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Face recognition service unavailable",
+        )
+
+    if not result.get("enrollment_successful"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.get("detail") or "No face detected in the supplied image",
+        )
+
+    template_hash = result.get("face_template_hash")
+    if not template_hash or len(template_hash) != 64:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Face service returned an invalid template hash",
+        )
+
+    current_user.face_embedding_hash = template_hash
+    current_user.face_enrolled = True
+
+    log_action(
+        db,
+        AuditAction.FACE_ENROLLED,
+        user_id=current_user.id,
+        resource_type="user",
+        resource_id=current_user.id,
+        request=request,
+        # Deliberately records only the quality score, never the hash itself.
+        details={"quality_score": result.get("quality_score")},
+    )
+    db.commit()
+
+    return FaceEnrollResponse(
+        success=True,
+        message="Face enrolled successfully",
+        face_enrolled=True,
+        quality_score=result.get("quality_score"),
+    )

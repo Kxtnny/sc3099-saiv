@@ -34,6 +34,7 @@ from app.schemas.user import (
     UserLogin,
     UserResponse,
 )
+from app.services import rate_limit
 from app.services.audit import log_action
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,8 @@ def register(payload: UserCreate, request: Request, db: Session = Depends(get_db
     Weak passwords and malformed emails are rejected by the schema with 422; a
     duplicate email returns 400.
     """
+    rate_limit.check_registration(request)
+
     email = payload.email.lower().strip()
 
     if db.query(User.id).filter(User.email == email).first():
@@ -108,10 +111,13 @@ def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)):
     401 for bad credentials, 403 for a deactivated account. The failure
     responses deliberately do not reveal whether the email exists.
     """
+    rate_limit.check_login_attempts(request)
+
     email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == email).first()
 
     if user is None or not verify_password(payload.password, user.hashed_password):
+        rate_limit.record_login_failure(request)
         log_action(
             db,
             AuditAction.LOGIN_FAILED,
@@ -141,6 +147,8 @@ def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Account is disabled"
         )
+
+    rate_limit.clear_login_failures(request)
 
     user.last_login_at = utcnow()
     log_action(

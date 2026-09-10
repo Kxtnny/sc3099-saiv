@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.security import TOKEN_TYPE_ACCESS, decode_token_of_type
 from app.enums import ROLE_LEVELS, UserRole
 from app.models import User
+from app.services import rate_limit
 
 # auto_error=False so a missing header produces our own 401 with a "detail"
 # body rather than FastAPI's default 403.
@@ -56,6 +57,10 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Account is disabled"
         )
+
+    # 1000 requests/hour per user (SECURITY-REQUIREMENTS.md). Applied here so
+    # every authenticated route is covered without per-router boilerplate.
+    rate_limit.check_api_quota(user.id)
 
     return user
 
