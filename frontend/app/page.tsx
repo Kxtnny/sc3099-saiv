@@ -1,79 +1,56 @@
-/**
- * SAIV Student Frontend - Module 1
- *
- * This is the skeleton implementation for the Student Frontend PWA.
- * Students must implement the check-in interface with camera access,
- * geolocation, and device binding.
- */
+'use client';
+import { useEffect, useMemo, useState } from 'react';
+import { AuthProvider, useAuth } from '@/lib/auth';
+import LoginForm from '@/components/LoginForm';
+import RegisterForm from '@/components/RegisterForm';
+import ConsentGate from '@/components/ConsentGate';
+import CheckinFlow from '@/components/CheckinFlow';
+
+const DAILY_QUOTES = [
+  'Presence is the first step towards progress.',
+  'Small moments of discipline build remarkable futures.',
+  'Show up with purpose. Leave with progress.',
+  'Learning begins the moment you arrive.',
+  'Consistency turns ordinary days into extraordinary results.',
+  'Every class is another chance to move forward.',
+  'Your future is shaped by what you choose today.',
+];
+
+function DailyQuote() {
+  const quote = useMemo(() => {
+    const now = new Date();
+    const day = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000);
+    return DAILY_QUOTES[day % DAILY_QUOTES.length];
+  }, []);
+  return <p className="daily-quote">“{quote}”</p>;
+}
+
+function BrandPanel() {
+  return <section className="brand-panel">
+    <div className="brand-glow brand-glow-one" /><div className="brand-glow brand-glow-two" />
+    <div className="brand-content">
+      <div className="brand-mark"><span>S</span></div>
+      <div className="brand-copy"><p className="eyebrow">Secure attendance · verified identity</p><h1>Presence,<br /><span>proven.</span></h1><p className="brand-description">A smarter, safer way to verify attendance—built around your identity, location and privacy.</p></div>
+      <DailyQuote />
+      <div className="trust-row"><span><i className="status-dot" /> Encrypted</span><span>Privacy-first</span><span>Real-time</span></div>
+    </div>
+  </section>;
+}
+
+function Screen() {
+  const { user, loading, logout } = useAuth();
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [consented, setConsented] = useState(false);
+  if (loading) return <div className="loading-state"><span className="spinner" /><p>Preparing your secure workspace…</p></div>;
+  if (!user) return <div className="auth-shell"><BrandPanel /><section className="auth-panel"><div className="mobile-brand"><span className="mini-mark">S</span><strong>SAIV</strong></div><div className="auth-card">{authMode === 'login' ? <LoginForm onSwitchToRegister={() => setAuthMode('register')} /> : <RegisterForm onSwitchToLogin={() => setAuthMode('login')} />}</div><p className="auth-footer">Protected by secure identity verification</p></section></div>;
+  const hasConsent = user.camera_consent && user.geolocation_consent;
+  return <div className="app-shell">
+    <header className="app-header"><div className="app-brand"><span className="mini-mark">S</span><div><strong>SAIV</strong><small>Student portal</small></div></div><div className="user-actions"><div className="user-avatar">{user.full_name?.charAt(0).toUpperCase() || 'S'}</div><div className="user-copy"><span>Welcome back</span><strong>{user.full_name}</strong></div><button onClick={logout} className="sign-out">Sign out</button></div></header>
+    <main className="dashboard-main"><div className="dashboard-heading"><p className="eyebrow">Secure attendance</p><h1>{!hasConsent && !consented ? 'Set up verification' : 'Ready to check in?'}</h1><p>{!hasConsent && !consented ? 'Enable the required permissions once to continue.' : 'Choose your active session and complete a quick identity check.'}</p></div><div className="workflow-card">{!hasConsent && !consented ? <ConsentGate onContinue={() => setConsented(true)} /> : <CheckinFlow />}</div></main>
+  </div>;
+}
 
 export default function Home() {
-  return (
-    <main className="min-h-screen p-8">
-      <h1 className="text-3xl font-bold mb-4">
-        SAIV - Secure Attendance System
-      </h1>
-      <p className="text-gray-600 mb-8">
-        Student Check-in Interface
-      </p>
-
-      {/* ================================================================== */}
-      {/* TODO: Implement the following features                             */}
-      {/* ================================================================== */}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Authentication                                                     */}
-      {/* ------------------------------------------------------------------ */}
-      {/* - Login form with email/password                                   */}
-      {/* - Registration form                                                */}
-      {/* - JWT token storage (secure, HttpOnly where possible)              */}
-      {/* - Auto-refresh token logic                                         */}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Camera Access                                                      */}
-      {/* ------------------------------------------------------------------ */}
-      {/* - WebRTC camera stream                                             */}
-      {/* - Liveness challenge UI (blink, head turn prompts)                 */}
-      {/* - Frame capture for face verification                              */}
-      {/* - Consent flow before camera access                                */}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Geolocation                                                        */}
-      {/* ------------------------------------------------------------------ */}
-      {/* - Geolocation API integration                                      */}
-      {/* - Explicit consent before location access                          */}
-      {/* - GPS coordinates sent with check-in                               */}
-      {/* - Error handling for denied permissions                            */}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Device Binding                                                     */}
-      {/* ------------------------------------------------------------------ */}
-      {/* - ECDSA key pair generation (Web Crypto API)                       */}
-      {/* - Public key rotation on each session                              */}
-      {/* - Device fingerprinting                                            */}
-      {/* - Secure key storage                                               */}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* PWA Features                                                       */}
-      {/* ------------------------------------------------------------------ */}
-      {/* - Service worker for offline support                               */}
-      {/* - PWA manifest                                                     */}
-      {/* - Offline check-in queue with sync                                 */}
-      {/* - LocalForage for persistent storage                               */}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Check-in Flow                                                      */}
-      {/* ------------------------------------------------------------------ */}
-      {/* 1. Select active session                                           */}
-      {/* 2. Grant camera permission (with consent)                          */}
-      {/* 3. Complete liveness challenge                                     */}
-      {/* 4. Grant location permission (with consent)                        */}
-      {/* 5. Submit check-in to backend                                      */}
-      {/* 6. Display success/failure with risk score                         */}
-
-      <div className="bg-yellow-100 border-l-4 border-yellow-500 p-4 mt-8">
-        <p className="font-bold">Skeleton Implementation</p>
-        <p>Please implement the required features as described above.</p>
-      </div>
-    </main>
-  );
+  useEffect(() => { if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {}); }, []);
+  return <AuthProvider><Screen /></AuthProvider>;
 }
