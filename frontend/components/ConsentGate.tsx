@@ -4,7 +4,9 @@ import { useState } from 'react';
 import { useAuth } from '@/lib/auth';
 import { getCurrentPosition } from '@/lib/geolocation';
 
-export default function ConsentGate({ onContinue }: { onContinue: () => void }) {
+// Once both consents are recorded, the parent page swaps this gate for the
+// check-in flow automatically, so there is no separate "Continue" step.
+export default function ConsentGate() {
   const { user, updateConsent } = useAuth();
   const [busy, setBusy] = useState<'camera' | 'location' | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -77,14 +79,6 @@ export default function ConsentGate({ onContinue }: { onContinue: () => void }) 
           {locationGranted ? 'Location enabled ✓' : busy === 'location' ? 'Requesting…' : 'Allow location'}
         </button>
       </div>
-
-      <button
-        disabled={!cameraGranted || !locationGranted}
-        onClick={onContinue}
-        className="w-full rounded-md bg-gray-900 text-white py-2 font-medium disabled:opacity-40"
-      >
-        Continue to check-in
-      </button>
     </div>
   );
 }

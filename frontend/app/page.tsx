@@ -5,6 +5,7 @@ import LoginForm from '@/components/LoginForm';
 import RegisterForm from '@/components/RegisterForm';
 import ConsentGate from '@/components/ConsentGate';
 import CheckinFlow from '@/components/CheckinFlow';
+import PrivacySettings from '@/components/PrivacySettings';
 
 const DAILY_QUOTES = [
   'Presence is the first step towards progress.',
@@ -40,13 +41,13 @@ function BrandPanel() {
 function Screen() {
   const { user, loading, logout } = useAuth();
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [consented, setConsented] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
   if (loading) return <div className="loading-state"><span className="spinner" /><p>Preparing your secure workspace…</p></div>;
   if (!user) return <div className="auth-shell"><BrandPanel /><section className="auth-panel"><div className="mobile-brand"><span className="mini-mark">S</span><strong>SAIV</strong></div><div className="auth-card">{authMode === 'login' ? <LoginForm onSwitchToRegister={() => setAuthMode('register')} /> : <RegisterForm onSwitchToLogin={() => setAuthMode('login')} />}</div><p className="auth-footer">Protected by secure identity verification</p></section></div>;
   const hasConsent = user.camera_consent && user.geolocation_consent;
   return <div className="app-shell">
-    <header className="app-header"><div className="app-brand"><span className="mini-mark">S</span><div><strong>SAIV</strong><small>Student portal</small></div></div><div className="user-actions"><div className="user-avatar">{user.full_name?.charAt(0).toUpperCase() || 'S'}</div><div className="user-copy"><span>Welcome back</span><strong>{user.full_name}</strong></div><button onClick={logout} className="sign-out">Sign out</button></div></header>
-    <main className="dashboard-main"><div className="dashboard-heading"><p className="eyebrow">Secure attendance</p><h1>{!hasConsent && !consented ? 'Set up verification' : 'Ready to check in?'}</h1><p>{!hasConsent && !consented ? 'Enable the required permissions once to continue.' : 'Choose your active session and complete a quick identity check.'}</p></div><div className="workflow-card">{!hasConsent && !consented ? <ConsentGate onContinue={() => setConsented(true)} /> : <CheckinFlow />}</div></main>
+    <header className="app-header"><div className="app-brand"><span className="mini-mark">S</span><div><strong>SAIV</strong><small>Student portal</small></div></div><div className="user-actions"><div className="user-avatar">{user.full_name?.charAt(0).toUpperCase() || 'S'}</div><div className="user-copy"><span>Welcome back</span><strong>{user.full_name}</strong></div><button onClick={() => setShowPrivacy(true)} className="sign-out">Privacy</button><button onClick={() => { setShowPrivacy(false); logout(); }} className="sign-out">Sign out</button></div></header>
+    <main className="dashboard-main"><div className="dashboard-heading"><p className="eyebrow">Secure attendance</p><h1>{showPrivacy ? 'Privacy & permissions' : !hasConsent ? 'Set up verification' : 'Ready to check in?'}</h1><p>{showPrivacy ? 'Review or withdraw the consent you have given.' : !hasConsent ? 'Enable the required permissions once to continue.' : 'Choose your active session and complete a quick identity check.'}</p></div><div className="workflow-card">{showPrivacy ? <PrivacySettings onBack={() => setShowPrivacy(false)} /> : !hasConsent ? <ConsentGate /> : <CheckinFlow />}</div></main>
   </div>;
 }
 

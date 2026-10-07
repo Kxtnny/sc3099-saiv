@@ -12,6 +12,7 @@ export interface SessionSummary {
   scheduled_start: string;
   scheduled_end: string;
   venue_name?: string;
+  qr_code_enabled?: boolean;
 }
 
 export default function SessionPicker({ onSelect }: { onSelect: (session: SessionSummary) => void }) {

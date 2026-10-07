@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { api, refreshAccessToken } from './api';
+import { api, onSessionExpired, refreshAccessToken } from './api';
 import { tokenStore } from './tokenStore';
 
 export interface User {
@@ -51,6 +51,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     })();
   }, [refreshUser]);
+
+  // Tokens were already cleared by the API layer; just reflect it in the UI.
+  useEffect(() => onSessionExpired(() => setUser(null)), []);
 
   const login = useCallback(async (email: string, password: string) => {
     const { data } = await api.post('/auth/login', { email, password });

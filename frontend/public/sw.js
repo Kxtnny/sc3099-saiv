@@ -1,4 +1,5 @@
-const CACHE_NAME = 'saiv-shell-v1';
+// Bump when caching rules change so the activate handler purges old caches.
+const CACHE_NAME = 'saiv-shell-v2';
 const APP_SHELL = ['/', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
@@ -21,8 +22,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   // NEVER cache API calls — auth and check-in submissions must always hit
-  // the network (or fail explicitly so the app can queue them offline).
-  if (url.pathname.startsWith('/api/')) {
+  // the network. The backend lives on another origin (NEXT_PUBLIC_API_URL),
+  // so skip every cross-origin request rather than relying on its path.
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
     return;
   }
 
@@ -36,8 +38,10 @@ self.addEventListener('fetch', (event) => {
       caches.match(request).then((cached) => {
         if (cached) return cached;
         return fetch(request).then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
           return response;
         });
       })
@@ -49,8 +53,10 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        }
         return response;
       })
       .catch(() => caches.match(request).then((cached) => cached || caches.match('/')))

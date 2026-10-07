@@ -19,6 +19,18 @@ api.interceptors.request.use((config) => {
 // refresh calls in parallel.
 let refreshPromise: Promise<string | null> | null = null;
 
+// Notified when the backend rejects the refresh token, so the UI can drop
+// back to the login screen instead of showing a dashboard where every
+// request fails.
+const sessionExpiredListeners = new Set<() => void>();
+
+export function onSessionExpired(listener: () => void): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
+}
+
 async function refreshAccessToken(): Promise<string | null> {
   const refreshToken = tokenStore.getRefreshToken();
   if (!refreshToken) return null;
@@ -32,8 +44,16 @@ async function refreshAccessToken(): Promise<string | null> {
       tokenStore.setRefreshToken(data.refresh_token);
     }
     return data.access_token as string;
-  } catch {
-    tokenStore.clear();
+  } catch (err) {
+    // Only a definitive rejection (expired/invalid token, disabled account)
+    // ends the session. Network errors, timeouts, rate limits and 5xx keep
+    // the refresh token so the user isn't logged out by a flaky connection.
+    const status = (err as AxiosError).response?.status;
+    const rejected = status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+    if (rejected) {
+      tokenStore.clear();
+      sessionExpiredListeners.forEach((listener) => listener());
+    }
     return null;
   }
 }
