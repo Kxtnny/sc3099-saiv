@@ -1,90 +1,142 @@
 """
-SAIV Instructor Dashboard - Module 4
-
-This is the skeleton implementation for the Observability module.
-Students must implement the instructor dashboard with session management,
-attendance monitoring, and metrics visualization.
+SAIV Instructor & Observability Dashboard - Module 4 Entrypoint
 """
 
+import sys
+from pathlib import Path
+
+# Ensure the dashboard directory is on sys.path so 'app.*' imports resolve cleanly
+DASHBOARD_DIR = Path(__file__).resolve().parent.parent
+if str(DASHBOARD_DIR) not in sys.path:
+    sys.path.insert(0, str(DASHBOARD_DIR))
+
 import streamlit as st
-import os
+
+from app.api_client import api_client
+from app.auth import (
+    get_current_user,
+    get_token,
+    is_authenticated,
+    render_login_page,
+    render_sidebar_user_profile,
+)
+from app.views import (
+    audit,
+    checkins,
+    courses,
+    observability,
+    overview,
+    review_queue,
+    sessions,
+)
 
 # Page configuration
 st.set_page_config(
-    page_title="SAIV Instructor Dashboard",
-    page_icon="📊",
-    layout="wide"
+    page_title="SAIV Dashboard",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# Environment variables
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
+# Custom Styling
+st.markdown(
+    """
+    <style>
+    /* Metric styling */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.8rem;
+        font-weight: 700;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-weight: 500;
+        color: #4B5563;
+    }
+    /* Buttons */
+    .stButton button {
+        border-radius: 6px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-st.title("SAIV Instructor Dashboard")
-st.write("Welcome to the Secure Attendance & Identity Verification System")
 
-# =============================================================================
-# TODO: Implement the following pages/features
-# =============================================================================
+def main() -> None:
+    # -------------------------------------------------------------------------
+    # Authentication Gate
+    # -------------------------------------------------------------------------
+    if not is_authenticated():
+        render_login_page()
+        return
 
-# -----------------------------------------------------------------------------
-# Authentication
-# -----------------------------------------------------------------------------
-# - Login form for instructors
-# - JWT token management
-# - Session persistence
+    # -------------------------------------------------------------------------
+    # Sidebar Navigation & Branding
+    # -------------------------------------------------------------------------
+    token = get_token()
+    user = get_current_user()
 
-# -----------------------------------------------------------------------------
-# Overview Page
-# -----------------------------------------------------------------------------
-# - Total sessions (active/inactive)
-# - Total check-ins & success rate
-# - Recent check-ins table
-# - Check-ins by hour chart
-# - Verification status pie chart
+    with st.sidebar:
+        st.markdown(
+            """
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+                <span style="font-size: 2rem;">🛡️</span>
+                <div>
+                    <h2 style="margin: 0; font-size: 1.4rem; color: #1E3A8A;">SAIV</h2>
+                    <span style="font-size: 0.8rem; color: #6B7280; font-weight: 500;">INSTRUCTOR PORTAL</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-# -----------------------------------------------------------------------------
-# Sessions Management
-# -----------------------------------------------------------------------------
-# - View all sessions with details
-# - Create new sessions with geofence config
-# - View check-ins per session
-# - CSV export for gradebook
+        # Check for pending flagged check-ins to show alert badge in menu
+        flagged_badge = ""
+        try:
+            ok_flag, flag_data = api_client.get_flagged_checkins(token=token, limit=1)
+            if ok_flag and isinstance(flag_data, dict):
+                flagged_count = flag_data.get("total", len(flag_data.get("items", [])))
+                if flagged_count > 0:
+                    flagged_badge = f" ({flagged_count})"
+        except Exception:
+            pass
 
-# -----------------------------------------------------------------------------
-# Check-ins View
-# -----------------------------------------------------------------------------
-# - Filter by session, verification status
-# - Real-time updates
-# - CSV export for gradebook integration
-# - Attendance data with all signals
+        nav_options = [
+            "📊 Overview",
+            "📅 Sessions",
+            f"🚨 Review Queue{flagged_badge}",
+            "📋 Check-in Explorer",
+            "🎓 Courses & Rosters",
+            "📜 Security Audit",
+            "📈 Observability",
+        ]
 
-# -----------------------------------------------------------------------------
-# Audit Logs
-# -----------------------------------------------------------------------------
-# - Browse system events
-# - Filter by event type, user, action
-# - Color-coded by severity
-# - Export audit trail
+        selected_page = st.radio(
+            "Navigation",
+            options=nav_options,
+            label_visibility="collapsed",
+        )
 
-# -----------------------------------------------------------------------------
-# Metrics Dashboard
-# -----------------------------------------------------------------------------
-# - API response times (p95 latency)
-# - Request rates
-# - Success rates
-# - Risk score distribution
-# - High-risk alerts
-# - System health status
+        # User profile & logout button at bottom of sidebar
+        render_sidebar_user_profile()
 
-# =============================================================================
-# CSV Export Format
-# =============================================================================
-# Required columns:
-# - Check-in ID, Student ID, Session ID
-# - Timestamp, Verification Status
-# - Risk Score, Liveness Score, Face Match Score
-# - GPS Coordinates (latitude, longitude)
+    # -------------------------------------------------------------------------
+    # View Routing
+    # -------------------------------------------------------------------------
+    if selected_page == "📊 Overview":
+        overview.render()
+    elif selected_page == "📅 Sessions":
+        sessions.render()
+    elif selected_page.startswith("🚨 Review Queue"):
+        review_queue.render()
+    elif selected_page == "📋 Check-in Explorer":
+        checkins.render()
+    elif selected_page == "🎓 Courses & Rosters":
+        courses.render()
+    elif selected_page == "📜 Security Audit":
+        audit.render()
+    elif selected_page == "📈 Observability":
+        observability.render()
 
-# Placeholder content
-st.info("This is a skeleton implementation. Please implement the required features.")
+
+if __name__ == "__main__":
+    main()
