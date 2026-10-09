@@ -147,26 +147,14 @@ def update_course(
     course_id: str,
     payload: CourseUpdate,
     request: Request,
-    current_user: User = Depends(get_optional_user),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Update a course. Admin, or the instructor who teaches it."""
-    if current_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-        )
-
+    """Update a course. Admin only."""
     course = db.query(Course).filter(Course.id == course_id).first()
     if course is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Course not found"
-        )
-
-    is_admin = current_user.role == UserRole.ADMIN.value
-    if not is_admin and course.instructor_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
         )
 
     changes = payload.model_dump(exclude_unset=True)
@@ -174,9 +162,6 @@ def update_course(
         changes["name"] = sanitize_text(changes["name"])
     if "description" in changes and changes["description"]:
         changes["description"] = sanitize_text(changes["description"], max_length=2000)
-    # Reassigning a course to another instructor is an administrative action.
-    if "instructor_id" in changes and not is_admin:
-        changes.pop("instructor_id")
 
     for field, value in changes.items():
         setattr(course, field, value)
@@ -184,7 +169,7 @@ def update_course(
     log_action(
         db,
         AuditAction.COURSE_UPDATED,
-        user_id=current_user.id,
+        user_id=admin.id,
         resource_type="course",
         resource_id=course.id,
         request=request,

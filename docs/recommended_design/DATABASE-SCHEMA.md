@@ -73,6 +73,12 @@ Course information.
 
 **Indexes:** code, semester, is_active
 
+**Note:** there is deliberately no `instructor_id` column on `courses`. The
+instructor is recorded per session (`sessions.instructor_id`), since different
+sessions of a course may be run by different instructors/TAs. If your design
+needs a course-level instructor, add a nullable `instructor_id` FK(users.id)
+column; the API specification and tests do not require it.
+
 ---
 
 ### enrollments

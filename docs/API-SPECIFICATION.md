@@ -253,7 +253,6 @@ List courses with optional filters. **Requires auth.**
 |-----------|------|---------|-------------|
 | `is_active` | boolean | true | Filter by active status |
 | `semester` | string | - | Filter by semester |
-| `instructor_id` | uuid | - | Filter by instructor (admin only) |
 | `limit` | int | 50 | Results per page |
 | `offset` | int | 0 | Pagination offset |
 
@@ -266,8 +265,6 @@ List courses with optional filters. **Requires auth.**
       "code": "CS6101",
       "name": "Advanced Topics in CS",
       "semester": "AY2024-25 Sem 1",
-      "instructor_id": "uuid",
-      "instructor_name": "Dr. Smith",
       "venue_name": "LT1",
       "venue_latitude": 1.3483,
       "venue_longitude": 103.6831,
@@ -282,6 +279,11 @@ List courses with optional filters. **Requires auth.**
   "offset": 0
 }
 ```
+
+> **Note:** courses have no `instructor_id` / `instructor_name` field. In the
+> recommended schema (`recommended_design/DATABASE-SCHEMA.md`) the instructor is
+> linked per session via `sessions.instructor_id`. You may add a course-level
+> `instructor_id` in your own design; the tests do not check for it.
 
 #### GET /courses/{course_id}
 Get course details. **Requires auth.**
@@ -300,7 +302,6 @@ Create a new course. **Requires auth (admin only).**
   "code": "CS6101",
   "name": "Advanced Topics in CS",
   "semester": "AY2024-25 Sem 1",
-  "instructor_id": "uuid",
   "venue_name": "LT1",
   "venue_latitude": 1.3483,
   "venue_longitude": 103.6831,
@@ -312,7 +313,7 @@ Create a new course. **Requires auth (admin only).**
 **Response:** `201 Created` - Returns created course object
 
 #### PUT /courses/{course_id}
-Update a course. **Requires auth (admin or course instructor).**
+Update a course. **Requires auth (admin only).**
 
 **Request:** (partial update supported)
 ```json
@@ -967,7 +968,6 @@ Get current student's course enrollments. **Requires auth (student).**
     "course_code": "CS6101",
     "course_name": "Advanced Topics in CS",
     "semester": "AY2024-25 Sem 1",
-    "instructor_name": "Dr. Smith",
     "enrolled_at": "2024-01-10T10:00:00Z",
     "is_active": true
   }
@@ -1735,7 +1735,8 @@ Your implementation should pass 100% of public tests for full marks.
 ### Step 1: Install Dependencies
 
 ```bash
-pip install mediapipe opencv-python pillow
+# mediapipe >= 0.10.30 removed the `mediapipe.solutions` API used below - keep the pin
+pip install "mediapipe==0.10.18" "numpy<2" "opencv-python<4.12" pillow
 ```
 
 ### Step 2: Decode Base64 Images
