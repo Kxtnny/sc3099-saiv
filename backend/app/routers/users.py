@@ -258,8 +258,8 @@ def enroll_face(
     Enrol the caller's face for later verification.
 
     PRIVACY: the image is forwarded to the face service, which returns a
-    SHA-256 template hash. Only that 64-character hash is stored - the image is
-    never written to disk, the database, or the logs.
+    256-bit SimHash of the face embedding (64 hex characters). Only that hash
+    is stored - the image is never written to disk, the database, or the logs.
     """
     if not current_user.camera_consent:
         raise HTTPException(

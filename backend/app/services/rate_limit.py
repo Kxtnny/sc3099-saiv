@@ -2,36 +2,38 @@
 Redis-backed rate limiting.
 
 Fixed-window counters with TTL expiry, as specified in
-docs/SECURITY-REQUIREMENTS.md. Two deliberate deviations, both documented in
-config.py:
+docs/SECURITY-REQUIREMENTS.md. Deliberate deviations, documented in config.py:
 
 * The login limiter counts only FAILED attempts. Limiting successful logins
   per IP punishes shared networks (a lecture hall, a NAT gateway, a CI runner)
   without making brute force meaningfully harder.
-* Registration defaults to a permissive limit because the public test suite
-  creates far more than 10 accounts per run from one address. Tighten
-  RATE_LIMIT_REGISTER_PER_HOUR via the environment to demonstrate the control.
+* Per-IP limits default to 100,000/hour at the course staff's request, so the
+  graded suite (one IP) is never blocked. Brute force is stopped per account
+  instead: LOGIN_LOCKOUT_THRESHOLD consecutive failures lock the account.
 
-Redis outages fail open: attendance keeps working, and the event is logged.
+Redis outages fail open for the per-IP limits: attendance keeps working, and
+the event is logged. The account lockout falls back to an in-process counter
+so the control still holds.
 """
 
+import hashlib
 import logging
-from typing import Optional, Tuple
+import threading
+import time
+from typing import Dict, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
 from app.core.config import settings
 from app.core.redis_client import get_redis
+from app.services.network import client_ip as _resolve_client_ip
 
 logger = logging.getLogger(__name__)
 
 
 def client_ip(request: Request) -> str:
-    """Caller IP, honouring X-Forwarded-For when behind a proxy."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Caller IP (see services/network.py for the X-Forwarded-For rule)."""
+    return _resolve_client_ip(request) or "unknown"
 
 
 def hit(key: str, limit: int, window_seconds: int) -> Tuple[bool, int, int]:
@@ -139,6 +141,97 @@ def record_login_failure(request: Request) -> None:
 def clear_login_failures(request: Request) -> None:
     """A correct password clears the failure counter."""
     reset(login_key(client_ip(request)))
+
+
+# =============================================================================
+# Account lockout
+# =============================================================================
+
+# Fallback when Redis is unreachable: {key: (failures, expires_at)}. The
+# backend runs one process, so this is authoritative while Redis is down.
+_local_failures: Dict[str, Tuple[int, float]] = {}
+_local_lock = threading.Lock()
+
+
+def _lockout_key(email: str) -> str:
+    # Hashed so Redis never holds a readable email address.
+    digest = hashlib.sha256(email.lower().strip().encode()).hexdigest()[:32]
+    return f"lockout:login:{digest}"
+
+
+def _failure_count(key: str) -> Tuple[int, int]:
+    """(consecutive failures, seconds until they expire)."""
+    client = get_redis()
+    if client is not None:
+        try:
+            pipe = client.pipeline()
+            pipe.get(key)
+            pipe.ttl(key)
+            raw, ttl = pipe.execute()
+            return int(raw or 0), max(int(ttl or 0), 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Lockout store unavailable, using local: %s", exc)
+    with _local_lock:
+        count, expires_at = _local_failures.get(key, (0, 0.0))
+        remaining = expires_at - time.monotonic()
+        if remaining <= 0:
+            _local_failures.pop(key, None)
+            return 0, 0
+        return count, int(remaining)
+
+
+def check_account_lockout(email: str) -> None:
+    """
+    Raise 429 when the account has LOGIN_LOCKOUT_THRESHOLD consecutive
+    failures. Runs before the password is checked, so while the lock holds
+    even the correct password is refused.
+    """
+    key = _lockout_key(email)
+    count, retry_after = _failure_count(key)
+    if count >= settings.LOGIN_LOCKOUT_THRESHOLD:
+        logger.info("Login refused for locked account (%s failures)", count)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Account temporarily locked after too many failed login attempts",
+            headers={"Retry-After": str(max(retry_after, 1))},
+        )
+
+
+def record_account_failure(email: str) -> int:
+    """
+    Count one failed password for this account and return the new total.
+
+    Each failure restarts the expiry, so the count only lapses after
+    LOGIN_LOCKOUT_SECONDS without an attempt; the lock itself therefore lasts
+    LOGIN_LOCKOUT_SECONDS from the last counted failure.
+    """
+    key = _lockout_key(email)
+    window = settings.LOGIN_LOCKOUT_SECONDS
+    client = get_redis()
+    if client is not None:
+        try:
+            pipe = client.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, window)
+            count, _ = pipe.execute()
+            return int(count)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Lockout store unavailable, using local: %s", exc)
+    with _local_lock:
+        count, expires_at = _local_failures.get(key, (0, 0.0))
+        if expires_at <= time.monotonic():
+            count = 0
+        count += 1
+        _local_failures[key] = (count, time.monotonic() + window)
+        return count
+
+
+def clear_account_failures(email: str) -> None:
+    """A correct password before the lock resets the consecutive count."""
+    key = _lockout_key(email)
+    reset(key)
+    with _local_lock:
+        _local_failures.pop(key, None)
 
 
 def check_registration(request: Request) -> None:

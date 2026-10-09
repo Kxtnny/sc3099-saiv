@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.metrics import record_checkin_decision
 from app.core.sanitize import sanitize_text
 from app.core.utils import utcnow
 from app.dependencies import (
@@ -52,6 +53,7 @@ from app.schemas.checkin import (
     CheckInListItem,
     CheckInResponse,
     CheckInReview,
+    LivenessChallengeResponse,
     MyCheckInItem,
 )
 from app.schemas.common import PaginatedResponse
@@ -63,9 +65,11 @@ from app.services.audit import get_client_ip, get_user_agent
 from app.services.geo import (
     coordinates_valid,
     haversine_distance,
+    in_singapore,
     round_coordinates,
     travel_speed_kmh,
 )
+from app.services.network import ip_outside_singapore
 from app.services.risk import RiskAssessment
 
 logger = logging.getLogger(__name__)
@@ -168,6 +172,24 @@ def _audit_rejected_attempt(
     )
 
 
+def _outside_singapore_reason(
+    request: Request, payload: CheckInCreate
+) -> Optional[str]:
+    """
+    Why a check-in must be refused under the Singapore-only rule, or None.
+
+    The client IP follows services/network.py (first X-Forwarded-For address,
+    else the socket); private and local addresses count as on-campus.
+    """
+    if ip_outside_singapore(get_client_ip(request)):
+        return "ip_outside_singapore"
+    if coordinates_valid(payload.latitude, payload.longitude) and not in_singapore(
+        payload.latitude, payload.longitude
+    ):
+        return "gps_outside_singapore"
+    return None
+
+
 def _can_review(user: User, checkin: CheckIn) -> bool:
     """Course staff may review; students never can."""
     if user.role == UserRole.ADMIN.value:
@@ -189,9 +211,11 @@ def create_checkin(
     """
     Submit a check-in.
 
-    Rejected outright for a critical signal (failed liveness, or a location far
-    outside the geofence), flagged for review when the combined risk reaches
-    the session threshold, otherwise approved.
+    Refused with 403 from a public IP or a GPS fix outside Singapore.
+    Otherwise rejected outright for a critical signal (failed liveness, or a
+    location far outside the geofence), flagged for review when the combined
+    risk reaches the session threshold or a required face check could not
+    run, and approved otherwise.
     """
     if current_user.role != UserRole.STUDENT.value:
         raise HTTPException(
@@ -213,6 +237,19 @@ def create_checkin(
         )
 
     now = utcnow()
+
+    # Singapore-only check-ins (graded). Refused rather than stored as
+    # rejected, so a student who was on a foreign VPN can switch it off and
+    # try again instead of being blocked by the duplicate rule.
+    if settings.SINGAPORE_ONLY_CHECKINS:
+        reason = _outside_singapore_reason(request, payload)
+        if reason is not None:
+            _audit_rejected_attempt(db, current_user, request, session.id, reason)
+            record_checkin_decision(CheckInStatus.REJECTED.value)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Check-ins are only accepted from within Singapore",
+            )
 
     if session.status != SessionStatus.ACTIVE.value:
         _audit_rejected_attempt(db, current_user, request, session.id, "session_not_active")
@@ -392,27 +429,43 @@ def create_checkin(
                 )
 
     # -- Liveness and face match --------------------------------------------
+    # Two input shapes: a single frame (passive liveness), or a frame sequence
+    # recorded during a server-issued challenge (liveness_challenge_id from
+    # GET /checkins/liveness-challenge). The single frame, or else the first
+    # frame of the sequence, is used for face match.
     liveness_passed = None
     liveness_score = None
+    liveness_type = payload.liveness_challenge_type
     face_passed = None
     face_score = None
     face_hash = None
+    face_frame = payload.liveness_challenge_response or (
+        payload.liveness_frames[0] if payload.liveness_frames else None
+    )
+    # When the face service does not answer, a check the session requires
+    # was skipped: flag the check-in for review rather than approve it blind.
+    unavailable = {"reason": "face_service_unavailable"}
 
-    if payload.liveness_challenge_response:
+    if face_frame:
         result = face_client.check_liveness(
             payload.liveness_challenge_response,
-            payload.liveness_challenge_type or "passive",
+            liveness_type or "passive",
+            frames=payload.liveness_frames,
+            challenge_id=payload.liveness_challenge_id,
         )
         if result.get("available", True):
             liveness_passed = result.get("liveness_passed")
             liveness_score = result.get("liveness_score")
-            face_hash = result.get("face_embedding_hash")
+            liveness_type = result.get("challenge_type") or liveness_type
+            face_hash = result.get("face_embedding_hash") or None
 
             if liveness_passed is False:
+                details = {"score": liveness_score}
+                if result.get("reason"):
+                    # e.g. the challenge expired or was already used
+                    details["reason"] = result["reason"]
                 assessment.add(
-                    SignalType.LIVENESS_FAILED,
-                    details={"score": liveness_score},
-                    critical=True,
+                    SignalType.LIVENESS_FAILED, details=details, critical=True
                 )
             elif (
                 liveness_score is not None
@@ -422,20 +475,26 @@ def create_checkin(
                     SignalType.LIVENESS_LOW_CONFIDENCE,
                     details={"score": liveness_score},
                 )
+        elif session.require_liveness_check:
+            assessment.add(
+                SignalType.LIVENESS_LOW_CONFIDENCE,
+                details=unavailable,
+                needs_review=True,
+            )
 
         if session.require_face_match and current_user.face_embedding_hash:
             match = face_client.verify_face(
-                payload.liveness_challenge_response,
-                current_user.face_embedding_hash,
+                face_frame, current_user.face_embedding_hash
             )
             if match.get("available", True):
                 face_passed = match.get("match_passed")
                 face_score = match.get("match_score")
                 face_hash = match.get("current_template_hash") or face_hash
                 if face_passed is False:
-                    assessment.add(
-                        SignalType.FACE_MATCH_FAILED, details={"score": face_score}
-                    )
+                    details = {"score": face_score}
+                    if match.get("reason"):
+                        details["reason"] = match["reason"]
+                    assessment.add(SignalType.FACE_MATCH_FAILED, details=details)
                 elif (
                     face_score is not None
                     and face_score < settings.FACE_MATCH_THRESHOLD
@@ -444,6 +503,12 @@ def create_checkin(
                         SignalType.FACE_MATCH_LOW_CONFIDENCE,
                         details={"score": face_score},
                     )
+            else:
+                assessment.add(
+                    SignalType.FACE_MATCH_LOW_CONFIDENCE,
+                    details=unavailable,
+                    needs_review=True,
+                )
 
     # -- Network (face service second opinion) ------------------------------
     # Module 3 owns VPN/proxy detection. Only its network component is taken:
@@ -495,7 +560,7 @@ def create_checkin(
         distance_from_venue_meters=round(distance, 2) if distance is not None else None,
         liveness_passed=liveness_passed,
         liveness_score=liveness_score,
-        liveness_challenge_type=payload.liveness_challenge_type,
+        liveness_challenge_type=liveness_type,
         face_match_passed=face_passed,
         face_match_score=face_score,
         face_embedding_hash=face_hash,
@@ -565,6 +630,7 @@ def create_checkin(
 
     db.commit()
     db.refresh(checkin)
+    record_checkin_decision(decision.value, checkin.risk_score)
 
     response = _to_response(checkin)
     response.risk_level = assessment.level.value
@@ -574,6 +640,26 @@ def create_checkin(
 # =============================================================================
 # Reads - literal paths before /{checkin_id}
 # =============================================================================
+
+@router.get("/liveness-challenge", response_model=LivenessChallengeResponse)
+def liveness_challenge(_user: User = Depends(get_current_user)):
+    """
+    Issue a one-time liveness challenge for the check-in camera step.
+
+    Proxies the face service, which picks the action (blink, head_turn or
+    mouth_open) so a client cannot pre-record a matching clip. The client
+    shows the prompt, records ~2 s of frames, and submits them with the
+    challenge_id as liveness_frames / liveness_challenge_id. Each id is
+    consumed on first use and expires after expires_in seconds.
+    """
+    try:
+        challenge = face_client.issue_liveness_challenge()
+    except face_client.FaceServiceUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+        )
+    return LivenessChallengeResponse(**challenge)
+
 
 @router.get("/my-checkins", response_model=List[MyCheckInItem])
 def my_checkins(

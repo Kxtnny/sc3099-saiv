@@ -29,6 +29,8 @@ CSV_COLUMNS = [
     "student_id",
     "student_name",
     "student_email",
+    "course_code",
+    "course_name",
     "session_id",
     "session_name",
     "session_date",
@@ -56,10 +58,13 @@ def _csv_response(rows: List[dict], filename: str) -> StreamingResponse:
 
 def _row(checkin: CheckIn) -> dict:
     session = checkin.session
+    course = session.course if session else None
     return {
         "student_id": checkin.student_id,
         "student_name": checkin.student.full_name if checkin.student else "",
         "student_email": checkin.student.email if checkin.student else "",
+        "course_code": course.code if course else "",
+        "course_name": course.name if course else "",
         "session_id": checkin.session_id,
         "session_name": session.name if session else "",
         "session_date": (
@@ -94,7 +99,10 @@ def export_session(
 
     checkins = (
         db.query(CheckIn)
-        .options(joinedload(CheckIn.student), joinedload(CheckIn.session))
+        .options(
+            joinedload(CheckIn.student),
+            joinedload(CheckIn.session).joinedload(AttendanceSession.course),
+        )
         .filter(CheckIn.session_id == session_id)
         .order_by(CheckIn.checked_in_at)
         .all()
@@ -168,7 +176,10 @@ def export_course_attendance(
 
     query = (
         db.query(CheckIn)
-        .options(joinedload(CheckIn.student), joinedload(CheckIn.session))
+        .options(
+            joinedload(CheckIn.student),
+            joinedload(CheckIn.session).joinedload(AttendanceSession.course),
+        )
         .join(AttendanceSession, AttendanceSession.id == CheckIn.session_id)
         .filter(AttendanceSession.course_id == course_id)
     )

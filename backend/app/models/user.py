@@ -22,8 +22,8 @@ class User(Base):
     camera_consent = Column(Boolean, nullable=False, default=False)
     geolocation_consent = Column(Boolean, nullable=False, default=False)
 
-    # PRIVACY: only the SHA-256 hash of the face template, never an image or
-    # a raw embedding. 64 hex characters.
+    # PRIVACY: only a 256-bit SimHash of the face embedding (64 hex
+    # characters), never an image or the raw embedding.
     face_embedding_hash = Column(String(64), nullable=True)
     face_enrolled = Column(Boolean, nullable=False, default=False)
 

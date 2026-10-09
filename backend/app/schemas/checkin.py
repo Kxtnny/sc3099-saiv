@@ -3,16 +3,22 @@ Check-in schemas.
 
 PRIVACY: no response model exposes an image field. Submitted frames are held in
 memory for the liveness and face-match calls and then discarded - only scores
-and the SHA-256 template hash are persisted.
+and the 256-bit SimHash template are persisted.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.enums import CheckInStatus
 from app.schemas.common import UTCDateTime
+
+# Liveness frame sequence limits, matching the face service (5-45 frames).
+MIN_LIVENESS_FRAMES = 5
+MAX_LIVENESS_FRAMES = 45
+# ~1.5 MB of base64 per frame; a 640x480 JPEG at quality 0.7 is ~50 KB.
+MAX_FRAME_CHARS = 2_000_000
 
 
 def _coerce_risk_factors(value: Any) -> List[Dict[str, Any]]:
@@ -37,10 +43,23 @@ class CheckInCreate(BaseModel):
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     location_accuracy_meters: Optional[float] = Field(default=None, ge=0)
     device_fingerprint: Optional[str] = Field(default=None, max_length=64)
-    # Base64 frame, processed in memory and never stored.
+    # Base64 frame, processed in memory and never stored. Used for face match.
     liveness_challenge_response: Optional[str] = None
     liveness_challenge_type: Optional[str] = Field(default=None, max_length=50)
+    # Challenge flow (optional, so older clients keep working): the id from
+    # GET /checkins/liveness-challenge plus the frames recorded while the
+    # student performed it. Base64 JPEGs, never stored.
+    liveness_challenge_id: Optional[str] = Field(default=None, max_length=64)
+    liveness_frames: Optional[
+        List[Annotated[str, Field(max_length=MAX_FRAME_CHARS)]]
+    ] = Field(default=None, min_length=MIN_LIVENESS_FRAMES, max_length=MAX_LIVENESS_FRAMES)
     qr_code: Optional[str] = Field(default=None, max_length=255)
+
+
+class LivenessChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge_type: str
+    expires_in: int
 
 
 class CheckInAppeal(BaseModel):
