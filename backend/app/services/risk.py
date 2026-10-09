@@ -65,6 +65,8 @@ class RiskAssessment:
     score: float = 0.0
     signals: List[Dict[str, Any]] = field(default_factory=list)
     critical: bool = False
+    # A required check could not run; a human must look at it.
+    needs_review: bool = False
 
     def add(
         self,
@@ -73,8 +75,14 @@ class RiskAssessment:
         confidence: float = 1.0,
         details: Optional[Dict[str, Any]] = None,
         critical: bool = False,
+        needs_review: bool = False,
     ) -> None:
-        """Record a fired signal and add its weighted contribution."""
+        """
+        Record a fired signal and add its weighted contribution.
+
+        critical rejects the check-in outright; needs_review flags it at
+        minimum, whatever the score.
+        """
         weight = SIGNAL_WEIGHTS.get(signal_type, 0.1)
         severity = SIGNAL_SEVERITY.get(signal_type, SignalSeverity.MEDIUM)
         self.signals.append(
@@ -89,6 +97,8 @@ class RiskAssessment:
         self.score = min(1.0, self.score + weight * confidence)
         if critical:
             self.critical = True
+        if needs_review:
+            self.needs_review = True
 
     @property
     def level(self) -> RiskLevel:
@@ -108,10 +118,11 @@ class RiskAssessment:
         Two things reject outright: a critical signal (failed liveness, or a
         location far outside the geofence), or a combined score in the
         CRITICAL band (>= 0.7 per SECURITY-REQUIREMENTS.md). Anything at or
-        above the session threshold is flagged for instructor review.
+        above the session threshold, or with a required check that could not
+        run, is flagged for instructor review.
         """
         if self.critical or self.score >= settings.RISK_REJECT_THRESHOLD:
             return CheckInStatus.REJECTED
-        if self.score >= threshold:
+        if self.score >= threshold or self.needs_review:
             return CheckInStatus.FLAGGED
         return CheckInStatus.APPROVED

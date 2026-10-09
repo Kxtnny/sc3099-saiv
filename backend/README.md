@@ -70,7 +70,7 @@ app/
 | enrollments | my-enrollments, course roster, create, bulk, delete |
 | sessions | list, active (public), my-sessions, get, create, update, delete, `{id}/qr` (POST/DELETE) |
 | devices | my-devices, list, register (`/` and `/register`), patch, delete |
-| checkins | submit, list, my-checkins, flagged, session/{id}, get, appeal, review |
+| checkins | submit, liveness-challenge, list, my-checkins, flagged, session/{id}, get, appeal, review |
 | stats | overview, sessions/{id}, courses/{id}, students/{id} |
 | audit | list, summary, export, create |
 | export | session/{id}, attendance/{course_id} (CSV or JSON) |
@@ -84,9 +84,22 @@ the live schema. Where the public tests and the spec disagree, the tests win
 ## How a check-in is decided
 
 `POST /checkins/` validates in order - student role, 10/min rate limit,
-session active, window open, QR code (if the instructor issued one),
-enrollment, no duplicate - and every failure is written to the audit log as a
-`checkin_attempted` with a reason. Then it scores:
+session exists, **inside Singapore**, session active, window open, QR code
+(if the instructor issued one), enrollment, no duplicate - and every failure
+is written to the audit log as a `checkin_attempted` with a reason.
+
+**Singapore only (graded).** A check-in is refused with 403 when the client
+IP is a public address outside Singapore or the GPS fix is outside
+Singapore. The client IP is the first `X-Forwarded-For` address, falling
+back to the socket address; private and local addresses (10.x, 172.16-31.x,
+192.168.x, 127.x) count as on-campus. Singapore IPs come from an offline
+DB-IP extract (`app/data/sg_ip_ranges.txt`, refresh with
+`scripts/build_sg_ip_ranges.py`); the GPS test is a polygon along the Johor
+and Singapore Straits (`services/geo.py`), so Johor Bahru and Batam are
+outside. It is a 403 rather than a stored `rejected` row so a student on a
+foreign VPN can switch it off and retry.
+
+Then it scores:
 
 | Signal | Weight | Fires when |
 |---|---|---|
@@ -101,13 +114,36 @@ enrollment, no duplicate - and every failure is written to the audit log as a
 | `geo_accuracy_low` | 0.10 | fix worse than 200 m, or no location |
 
 Decision: any critical signal **or** score >= 0.7 -> `rejected`;
-score >= session threshold (default 0.5) -> `flagged`; otherwise `approved`.
-The signals are stored on the check-in and in `risk_signals` so a reviewer can
-see exactly why.
+score >= session threshold (default 0.5), **or a required face check that
+could not run** -> `flagged`; otherwise `approved`. The signals are stored on
+the check-in and in `risk_signals` so a reviewer can see exactly why.
 
-A face-service outage never rejects a student: liveness is recorded as *not
-evaluated* rather than *failed*, and a circuit breaker skips the call for
-30 s after a connection failure so latency stays under budget.
+A face-service outage never rejects a student, but it never approves one
+blind either: when a frame was sent and the session requires liveness (or
+face match, for an enrolled student) and the service did not answer, a
+`liveness_low_confidence` / `face_match_low_confidence` signal with reason
+`face_service_unavailable` is added and the check-in is flagged for review. A
+circuit breaker skips the call for 30 s after a connection failure so latency
+stays under budget. If the service *answers* with an error (bad image,
+expired or reused challenge), that counts as a failed check.
+
+### Liveness challenge flow
+
+1. `GET /api/v1/checkins/liveness-challenge` (any logged-in user) returns
+   `{challenge_id, challenge_type, expires_in}`; the type is `blink`,
+   `head_turn` or `mouth_open`, chosen by the face service. 503 if the face
+   service is down.
+2. Show the prompt and record ~2 s of frames.
+3. `POST /api/v1/checkins/` with the usual fields plus
+   `liveness_challenge_id` and `liveness_frames` (5-45 base64 JPEGs, no
+   data-URL prefix; ~10 frames at 640x480, quality 0.7). Keep sending one
+   clear frame as `liveness_challenge_response`; it is used for face match
+   (the first frame is used if it is missing).
+4. The face service consumes the challenge once; a reused or expired id
+   fails liveness, which rejects the check-in.
+
+All three fields are optional: without them the old single-frame passive
+check runs unchanged.
 
 ## Security and privacy controls
 
@@ -116,9 +152,18 @@ evaluated* rather than *failed*, and a circuit breaker skips the call for
 - **Passwords** bcrypt cost 10 (~90 ms), never serialised anywhere.
 - **RBAC** `require_admin` / `require_instructor` / `require_staff` guards;
   ownership checks on session edits and check-in appeals.
-- **Rate limiting** Redis fixed windows: failed logins 60/h/IP, check-ins
-  10/min/user, API 1000/h/user, registration (see below). Fails open if Redis
-  is down.
+- **Account lockout (graded)** 10 consecutive failed passwords on one
+  account -> every further login for it returns 429 (even with the right
+  password) for 15 minutes. A successful login resets the count. Unknown
+  emails lock the same way so responses never reveal which accounts exist.
+  Redis-backed, with an in-process fallback if Redis is down.
+- **Rate limiting** Redis fixed windows: failed logins and registrations
+  100,000/h/IP (see below), check-ins 10/min/user, API 1000/h/user. Fails
+  open if Redis is down.
+- **Client IP** first `X-Forwarded-For` address when present, otherwise the
+  socket address (course staff's rule). `TRUSTED_PROXIES` can restrict which
+  peers may send the header. Used for rate limits, audit logs and the
+  Singapore rule.
 - **Input** Pydantic validation, ORM-only SQL, HTML stripped from free text,
   coordinates range-checked.
 - **Audit log** append-only at the database level (Postgres triggers reject
@@ -143,12 +188,21 @@ privacy test sets both to false before others check in). Consent is tracked
 and exposed; enforcing it would fail the suite. `POST /users/me/face/enroll`
 *does* require camera consent.
 
-**Two rate limits deviate from the spec, deliberately and configurably.**
-The login limiter counts only *failed* attempts - limiting successful logins
-per IP punishes a lecture hall behind one NAT without slowing brute force.
-Registration defaults to 1000/h because the public suite creates ~200
-accounts per run from one IP; set `RATE_LIMIT_REGISTER_PER_HOUR=10` to
-demonstrate the documented value.
+**Per-IP rate limits default to 100,000/h, as the course staff asked**, so
+the graded suite (all from one IP) is never blocked; brute force is stopped
+per account by the lockout instead. The login limiter counts only *failed*
+attempts - limiting successful logins per IP punishes a lecture hall behind
+one NAT. Set `RATE_LIMIT_LOGIN_PER_HOUR=60` and
+`RATE_LIMIT_REGISTER_PER_HOUR=10` to demonstrate the documented values.
+
+**`X-Forwarded-For` is trusted from any peer by default**, because the course
+staff specify the first forwarded address as the client IP. The trade-off: a
+client connecting directly can send any address it likes, which affects the
+per-IP limits, the IP recorded in audit logs and the Singapore IP check (the
+GPS check and the per-account lockout are unaffected). In a real deployment
+behind a reverse proxy, set `TRUSTED_PROXIES` to the proxy's networks (e.g.
+`127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`) so only it may set the
+header.
 
 **`GET /courses/` and `/sessions/active` are public.** The spec marks courses
 as authenticated, but the performance tests call it with no token, and the
@@ -179,6 +233,10 @@ touch:
 | `FACE_SERVICE_URL` | `http://localhost:8001` | Module 3 |
 | `RISK_SCORE_THRESHOLD` / `RISK_REJECT_THRESHOLD` | 0.5 / 0.7 | flag / reject cut-offs |
 | `RATE_LIMIT_*` | see file | per-limiter values |
+| `LOGIN_LOCKOUT_THRESHOLD` / `LOGIN_LOCKOUT_SECONDS` | 10 / 900 | account lockout |
+| `TRUSTED_PROXIES` | `*` (any) | peers whose `X-Forwarded-For` is honoured |
+| `SINGAPORE_ONLY_CHECKINS` | true | refuse check-ins from outside Singapore |
+| `FACE_CHECKIN_TIMEOUT` / `FACE_SEQUENCE_TIMEOUT` | 1.5 / 4.0 s | face calls for one frame / a challenge sequence |
 | `DATA_RETENTION_DAYS` | 30 | purge window |
 | `QR_CODE_TTL_SECONDS` | 300 | how long an issued QR code is valid |
 | `CORS_ORIGINS` | :3000, :8501 | frontend and dashboard |
@@ -190,7 +248,10 @@ touch:
   in the spec; `liveness_challenge_response` is a base64 frame with no data-URL
   prefix. Send `device_fingerprint` consistently - the same value every time
   from one device - or every check-in scores as an unknown device. If the
-  instructor has issued a QR code, pass it as `qr_code`.
+  instructor has issued a QR code, pass it as `qr_code`. For real blink /
+  head-turn prompts, follow the liveness challenge flow above. Login can
+  return 429 (account locked; `Retry-After` says for how long), and check-in
+  can return 403 "only accepted from within Singapore".
 - **Face service (Module 3)**: the backend calls `/face/enroll`,
   `/face/verify`, `/liveness/check` and `/risk/assess` exactly as the spec
   documents them. Return `enrollment_successful` and a 64-hex
@@ -198,6 +259,11 @@ touch:
   confident it is a spoof, because that rejects the check-in outright.
 - **Dashboard (Module 4)**: log in as an instructor; `/stats/*`,
   `/checkins/flagged`, `/checkins/{id}/review`, `/sessions/{id}/qr` and
-  `/export/*` are yours. Prometheus already scrapes `/metrics`
+  `/export/*` are yours; export rows now include `course_code` and
+  `course_name`. Prometheus already scrapes `/metrics`
   (`http_requests_total`, `http_request_duration_seconds`,
-  `checkin_attempts_total`).
+  `checkin_attempts_total` by HTTP status, and
+  `checkin_decisions_total{decision="approved|flagged|rejected"}` plus the
+  `checkin_risk_score` histogram by decision). Flagged share over 15 min:
+  `sum(increase(checkin_decisions_total{decision="flagged"}[15m])) /
+  sum(increase(checkin_decisions_total[15m]))`.

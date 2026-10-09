@@ -15,7 +15,7 @@ timeout before degrading.
 import logging
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -78,6 +78,12 @@ def _post(
         if response.status_code >= 500:
             logger.warning("Face service %s returned %s", path, response.status_code)
             return None
+        if response.status_code >= 400:
+            # The service answered and refused the input (bad image, expired
+            # or reused challenge). Callers treat this as a failed check, not
+            # as "not evaluated".
+            detail = response.json().get("detail") if response.content else None
+            return {"rejected": True, "status_code": response.status_code, "detail": detail}
         return response.json()
     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
         logger.warning("Face service %s unreachable: %s", path, exc)
@@ -114,24 +120,79 @@ def verify_face(image: str, reference_hash: str) -> Dict[str, Any]:
         settings.FACE_CHECKIN_TIMEOUT,
     )
     if result is None:
-        # None means "not evaluated", which the risk engine treats as neutral -
-        # distinct from False, which means "actively failed".
+        # None means "not evaluated" - the service did not answer - distinct
+        # from False, which means "actively failed".
         return {"match_passed": None, "match_score": None, "available": False}
+    if result.get("rejected"):
+        return {
+            "match_passed": False,
+            "match_score": None,
+            "available": True,
+            "reason": result.get("detail"),
+        }
     result.setdefault("available", True)
     return result
 
 
-def check_liveness(image: str, challenge_type: str = "passive") -> Dict[str, Any]:
-    """Run a liveness/anti-spoofing check on a captured frame."""
-    result = _post(
-        "/liveness/check",
-        {"challenge_response": image, "challenge_type": challenge_type},
-        settings.FACE_CHECKIN_TIMEOUT,
-    )
+def check_liveness(
+    image: Optional[str] = None,
+    challenge_type: str = "passive",
+    *,
+    frames: Optional[List[str]] = None,
+    challenge_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Run a liveness/anti-spoofing check.
+
+    Either one frame (passive, or the single-frame path) or a short frame
+    sequence recorded while the student performed a server-issued challenge.
+    With challenge_id the face service looks up and consumes the challenge,
+    so a reused or expired one comes back as a failure.
+    """
+    payload: Dict[str, Any] = {"challenge_type": challenge_type}
+    if frames:
+        payload["frames"] = frames
+    if image:
+        payload["challenge_response"] = image
+    if challenge_id:
+        payload["challenge_id"] = challenge_id
+
+    timeout = settings.FACE_SEQUENCE_TIMEOUT if frames else settings.FACE_CHECKIN_TIMEOUT
+    result = _post("/liveness/check", payload, timeout)
     if result is None:
         return {"liveness_passed": None, "liveness_score": None, "available": False}
+    if result.get("rejected"):
+        return {
+            "liveness_passed": False,
+            "liveness_score": 0.0,
+            "available": True,
+            "reason": result.get("detail"),
+        }
     result.setdefault("available", True)
     return result
+
+
+def issue_liveness_challenge() -> Dict[str, Any]:
+    """
+    Fetch a one-time challenge (challenge_id, challenge_type, expires_in).
+
+    Raises FaceServiceUnavailable: without a challenge the client cannot run
+    the challenge flow, so the caller must surface a 503.
+    """
+    try:
+        with httpx.Client(timeout=settings.FACE_CHECKIN_TIMEOUT) as client:
+            response = client.get(
+                f"{settings.FACE_SERVICE_URL.rstrip('/')}/liveness/challenge"
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("Face service /liveness/challenge failed: %s", exc)
+        raise FaceServiceUnavailable("Face recognition service unavailable")
+    if response.status_code != 200:
+        logger.warning(
+            "Face service /liveness/challenge returned %s", response.status_code
+        )
+        raise FaceServiceUnavailable("Liveness challenges are unavailable")
+    return response.json()
 
 
 def assess_risk(signals: Dict[str, Any]) -> Optional[Dict[str, Any]]:

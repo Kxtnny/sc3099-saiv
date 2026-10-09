@@ -15,18 +15,14 @@ from sqlalchemy.orm import Session
 
 from app.enums import AuditAction
 from app.models import AuditLog
+from app.services.network import client_ip
 
 logger = logging.getLogger(__name__)
 
 
 def get_client_ip(request: Optional[Request]) -> Optional[str]:
-    """Client IP, honouring X-Forwarded-For when behind a proxy."""
-    if request is None:
-        return None
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else None
+    """Client IP (see services/network.py for the X-Forwarded-For rule)."""
+    return client_ip(request)
 
 
 def get_user_agent(request: Optional[Request]) -> Optional[str]:

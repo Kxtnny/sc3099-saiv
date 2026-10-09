@@ -108,23 +108,46 @@ def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)):
     """
     Exchange credentials for an access and refresh token pair.
 
-    401 for bad credentials, 403 for a deactivated account. The failure
-    responses deliberately do not reveal whether the email exists.
+    401 for bad credentials, 403 for a deactivated account, 429 once the
+    account has LOGIN_LOCKOUT_THRESHOLD consecutive failed passwords (even
+    with the right password, until the lock expires). Unknown emails are
+    counted and locked the same way, so the responses never reveal whether
+    an account exists.
     """
     rate_limit.check_login_attempts(request)
 
     email = payload.email.lower().strip()
+
+    try:
+        rate_limit.check_account_lockout(email)
+    except HTTPException:
+        log_action(
+            db,
+            AuditAction.LOGIN_FAILED,
+            resource_type="user",
+            request=request,
+            details={"email": email, "reason": "account_locked"},
+            success=False,
+            commit=True,
+        )
+        raise
+
     user = db.query(User).filter(User.email == email).first()
 
     if user is None or not verify_password(payload.password, user.hashed_password):
         rate_limit.record_login_failure(request)
+        failures = rate_limit.record_account_failure(email)
         log_action(
             db,
             AuditAction.LOGIN_FAILED,
             user_id=user.id if user else None,
             resource_type="user",
             request=request,
-            details={"email": email, "reason": "invalid_credentials"},
+            details={
+                "email": email,
+                "reason": "invalid_credentials",
+                "consecutive_failures": failures,
+            },
             success=False,
             commit=True,
         )
@@ -149,6 +172,7 @@ def login(payload: UserLogin, request: Request, db: Session = Depends(get_db)):
         )
 
     rate_limit.clear_login_failures(request)
+    rate_limit.clear_account_failures(email)
 
     user.last_login_at = utcnow()
     log_action(
