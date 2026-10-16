@@ -292,14 +292,14 @@ async def root():
         "service": Config.SERVICE_NAME,
         "version": __version__,
         "endpoints": [
-            "GET /health - Health check",
-            "POST /face/enroll - Enroll a face for verification",
-            "POST /face/verify - Verify a face against enrolled template",
-            "POST /face/match - Legacy face matching (use /face/verify)",
-            "GET /liveness/challenge - Issue a one-time challenge nonce",
-            "POST /liveness/check - Perform liveness detection",
-            "POST /risk/assess - Multi-signal risk assessment",
-            "GET /metrics - Prometheus metrics",
+            "GET /health",
+            "POST /face/enroll",
+            "POST /face/verify",
+            "POST /face/match",
+            "GET /liveness/challenge",
+            "POST /liveness/check",
+            "POST /risk/assess",
+            "GET /metrics",
         ],
     }
 
