@@ -7,7 +7,8 @@ import pandas as pd
 import streamlit as st
 
 from app.api_client import api_client
-from app.auth import get_current_user, get_token
+from app.auth import can_view_audit, get_current_user, get_token
+from app.views._downloads import render_csv_download, render_json_download
 
 
 def render() -> None:
@@ -21,10 +22,8 @@ def render() -> None:
         st.warning("Please sign in to view audit logs.")
         return
 
-    # Check if user has admin/instructor role
-    role = user.get("role", "")
-    if role not in ["admin", "instructor"]:
-        st.error("Access restricted to Administrators and Course Instructors.")
+    if not can_view_audit(user):
+        st.error("Access restricted to Administrators.")
         return
 
     # -------------------------------------------------------------------------
@@ -53,15 +52,24 @@ def render() -> None:
     # Export Audit CSV
     col_exp1, col_exp2 = st.columns([3, 1])
     with col_exp2:
-        ok_csv, audit_csv = api_client.export_audit_csv(token)
-        if ok_csv and isinstance(audit_csv, bytes):
-            st.download_button(
-                label="📥 Export Audit Trail CSV",
-                data=audit_csv,
-                file_name="security_audit_logs.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+        render_csv_download(
+            token=token,
+            cache_key="audit",
+            request_label="📥 Export Audit Trail CSV",
+            download_label="Download Audit Trail CSV",
+            file_name="security_audit_logs.csv",
+            export=lambda: api_client.export_audit_csv(token),
+            use_container_width=True,
+        )
+        render_json_download(
+            token=token,
+            cache_key="audit",
+            request_label="📥 Export Audit Trail JSON",
+            download_label="Download Audit Trail JSON",
+            file_name="security_audit_logs.json",
+            export=lambda: api_client.export_audit_json(token),
+            use_container_width=True,
+        )
 
     st.markdown("---")
 
@@ -144,4 +152,3 @@ def render() -> None:
     )
     if logs:
         st.json(logs[selected_log_idx])
-

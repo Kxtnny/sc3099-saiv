@@ -1,0 +1,29 @@
+groups:
+  - name: saiv-dashboard-alerts
+    rules:
+      - alert: HighFlaggedCheckinShare
+        expr: |
+          sum(increase(checkin_decisions_total{decision="flagged"}[15m]))
+          /
+          clamp_min(sum(increase(checkin_decisions_total[15m])), 1)
+          > 0.30
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: High flagged check-in share
+          description: More than 30% of check-in decisions in the last 15 minutes were flagged.
+
+      - alert: ExcessiveFailedLogins
+        expr: |
+          sum(increase(http_requests_total{
+            method="POST",
+            endpoint="/api/v1/auth/login",
+            status="401"
+          }[5m])) > 20
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Excessive failed login responses
+          description: More than 20 HTTP 401 responses were returned by /api/v1/auth/login in the last 5 minutes.

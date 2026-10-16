@@ -9,6 +9,12 @@ from app.api_client import api_client
 from app.config import GRAFANA_URL, PROMETHEUS_URL
 
 
+P95_LATENCY_QUERY = (
+    "histogram_quantile(0.95, sum by (le) "
+    "(rate(http_request_duration_seconds_bucket[5m]))) * 1000"
+)
+
+
 def _extract_prom_value(data: Any) -> float:
     """Helper to parse a single scalar or vector value from Prometheus response."""
     try:
@@ -97,13 +103,12 @@ def render() -> None:
     st.caption(f"Scraped from Prometheus server at `{PROMETHEUS_URL}`.")
 
     # Queries
-    p95_query = "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) * 1000"
     rps_query = "sum(rate(http_requests_total[5m]))"
     err_query = "sum(rate(http_requests_total{status=~'5..'}[5m])) / sum(rate(http_requests_total[5m])) * 100"
-    checkin_query = "sum(rate(checkin_attempts_total[5m]))"
+    checkin_query = "sum(rate(checkin_decisions_total[5m]))"
 
     with st.spinner("Executing PromQL queries..."):
-        ok_p95, p95_res = api_client.query_prometheus(p95_query)
+        ok_p95, p95_res = api_client.query_prometheus(P95_LATENCY_QUERY)
         ok_rps, rps_res = api_client.query_prometheus(rps_query)
         ok_err, err_res = api_client.query_prometheus(err_query)
         ok_ci, ci_res = api_client.query_prometheus(checkin_query)
@@ -140,7 +145,7 @@ def render() -> None:
 
     with m4:
         st.metric(
-            label="Check-in Rate",
+            label="Check-in Decision Rate",
             value=f"{checkin_rate:.2f} /s",
             delta="5m moving rate",
         )
@@ -158,4 +163,3 @@ def render() -> None:
             st.json(res_q)
         else:
             st.error(f"Query error: {res_q}")
-
