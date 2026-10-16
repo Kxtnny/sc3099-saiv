@@ -21,7 +21,13 @@ const CONSENTS: { key: ConsentKey; title: string; description: string }[] = [
 /** Lets a student withdraw consent they gave in the ConsentGate. Withdrawing
  * sets the flag to false on the backend, which brings the gate back before
  * the next check-in, so opting back in uses the same explained flow. */
-export default function PrivacySettings({ onBack }: { onBack: () => void }) {
+export default function PrivacySettings({
+  onBack,
+  onReenroll,
+}: {
+  onBack: () => void;
+  onReenroll: () => void;
+}) {
   const { user, updateConsent } = useAuth();
   const [busy, setBusy] = useState<ConsentKey | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +76,29 @@ export default function PrivacySettings({ onBack }: { onBack: () => void }) {
           </div>
         );
       })}
+
+      <div className="rounded-lg border border-gray-200 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-medium">Face verification</h3>
+          <span className={`text-xs font-medium ${user?.face_enrolled ? 'text-green-700' : 'text-gray-500'}`}>
+            {user?.face_enrolled ? 'Enrolled' : 'Not enrolled'}
+          </span>
+        </div>
+        <p className="text-sm text-gray-600 mt-1">
+          Only a mathematical template of your face is stored, never the photo. Re-enroll if
+          verification keeps failing, for example after a big change in appearance.
+        </p>
+        <button
+          disabled={!user?.camera_consent}
+          onClick={onReenroll}
+          className="mt-3 rounded-md border border-blue-300 text-blue-700 text-sm px-4 py-2 disabled:opacity-50"
+        >
+          {user?.face_enrolled ? 'Re-enroll face' : 'Enroll face'}
+        </button>
+        {!user?.camera_consent && (
+          <p className="text-xs text-gray-500 mt-2">Camera consent is needed to enroll.</p>
+        )}
+      </div>
 
       <p className="text-xs text-gray-500">
         This updates your SAIV account. To also stop this site from using your camera or location,
