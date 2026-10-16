@@ -280,13 +280,13 @@ def _to_liveness_response(result: dict, face_hash: str) -> LivenessResponse:
 # =============================================================================
 
 @app.get("/health")
-async def health_check():
+def health_check():
     """Basic health check endpoint."""
     return {"status": "healthy", "service": Config.SERVICE_NAME}
 
 
 @app.get("/")
-async def root():
+def root():
     """List available endpoints."""
     return {
         "service": Config.SERVICE_NAME,
@@ -305,7 +305,7 @@ async def root():
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics():
+def metrics():
     """Prometheus scrape endpoint."""
     return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
@@ -315,7 +315,7 @@ async def metrics():
 # =============================================================================
 
 @app.post("/face/enroll", response_model=FaceEnrollResponse, status_code=201)
-async def enroll_face(request: FaceEnrollRequest):
+def enroll_face(request: FaceEnrollRequest):
     """
     Enroll a user's face for future verification.
 
@@ -374,7 +374,7 @@ async def enroll_face(request: FaceEnrollRequest):
 # =============================================================================
 
 @app.post("/face/verify", response_model=FaceVerifyResponse)
-async def verify_face(request: FaceVerifyRequest):
+def verify_face(request: FaceVerifyRequest):
     """
     Verify a face against an enrolled template.
 
@@ -422,12 +422,12 @@ async def verify_face(request: FaceVerifyRequest):
 
 
 @app.post("/face/match")
-async def match_face(request: FaceVerifyRequest):
+def match_face(request: FaceVerifyRequest):
     """
     Legacy face matching endpoint. Redirects to /face/verify.
     Kept for backwards compatibility.
     """
-    return await verify_face(request)
+    return verify_face(request)
 
 
 # =============================================================================
@@ -435,7 +435,7 @@ async def match_face(request: FaceVerifyRequest):
 # =============================================================================
 
 @app.get("/liveness/challenge", response_model=LivenessChallengeResponse)
-async def issue_liveness_challenge():
+def issue_liveness_challenge():
     """
     Issue a one-time challenge nonce stored in Redis with a TTL.
 
@@ -463,7 +463,7 @@ async def issue_liveness_challenge():
 
 
 @app.post("/liveness/check", response_model=LivenessResponse)
-async def check_liveness(request: LivenessRequest):
+def check_liveness(request: LivenessRequest):
     """
     Perform liveness detection on submitted image(s).
 
@@ -532,7 +532,7 @@ async def check_liveness(request: LivenessRequest):
 # =============================================================================
 
 @app.post("/risk/assess", response_model=RiskAssessResponse)
-async def assess_risk(request: RiskAssessRequest):
+def assess_risk(request: RiskAssessRequest):
     """
     Perform multi-signal risk assessment.
 
