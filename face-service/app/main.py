@@ -292,14 +292,14 @@ async def root():
         "service": Config.SERVICE_NAME,
         "version": __version__,
         "endpoints": [
-            "GET /health",
-            "POST /face/enroll",
-            "POST /face/verify",
-            "POST /face/match",
-            "GET /liveness/challenge",
-            "POST /liveness/check",
-            "POST /risk/assess",
-            "GET /metrics",
+            "/health",
+            "/face/enroll",
+            "/face/verify",
+            "/face/match",
+            "/liveness/challenge",
+            "/liveness/check",
+            "/risk/assess",
+            "/metrics",
         ],
     }
 
