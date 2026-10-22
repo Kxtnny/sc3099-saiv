@@ -12,6 +12,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
+import anyio.to_thread
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -77,6 +78,11 @@ async def _retention_loop() -> None:
 async def lifespan(app: FastAPI):
     """Create the schema on startup, release connections on shutdown."""
     logger.info("Starting %s v%s", settings.PROJECT_NAME, __version__)
+    # Sync endpoints and dependencies run on AnyIO's thread pool; see
+    # THREADPOOL_SIZE in config for why it must exceed concurrent requests.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = (
+        settings.THREADPOOL_SIZE
+    )
     if wait_for_database():
         init_db()
     else:

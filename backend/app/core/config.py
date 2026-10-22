@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     DB_CONNECT_TIMEOUT: int = 5
+    # Worker threads for sync endpoints and dependencies (AnyIO default: 40).
+    # Each request takes a pooled connection in one thread (get_current_user)
+    # and needs another thread to run the endpoint. With fewer threads than
+    # concurrent requests, threads waiting for a connection starve the
+    # requests holding one, and everything stalls until the 30s pool timeout.
+    # Keep this above the expected concurrent users (stress test: 100).
+    THREADPOOL_SIZE: int = 200
 
     # -- Authentication ------------------------------------------------------
     SECRET_KEY: str = "dev-secret-key-change-in-production"
