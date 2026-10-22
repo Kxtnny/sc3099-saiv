@@ -18,7 +18,11 @@ from app.views import _downloads
 from app.views import observability
 from app.views import overview
 from app.views.review_queue import _factor_score
-from app.views.sessions import _build_qr_image, _scheduled_time_utc
+from app.views.sessions import (
+    _build_qr_image,
+    _format_singapore_time,
+    _scheduled_time_utc,
+)
 
 
 class _SessionState(dict):
@@ -317,14 +321,43 @@ def test_flash_message_survives_rerun_and_is_consumed(monkeypatch):
 
 
 def test_unauthorized_response_does_not_expose_backend_auth_details():
-    response = requests.Response()
-    response.status_code = 401
+    response = _unauthorized_response()
     response._content = b'{"detail":"token signature is invalid"}'
 
     assert APIClient()._handle_response(response) == (
         False,
         "Your session has expired. Please sign in again.",
     )
+
+
+def test_failed_login_shows_backend_reason_not_session_expiry():
+    response = requests.Response()
+    response.status_code = 401
+    response.headers["content-type"] = "application/json"
+    response._content = b'{"detail":"Incorrect email or password"}'
+    response.request = requests.Request(
+        "POST", "https://api.example.test/api/v1/auth/login"
+    ).prepare()
+
+    assert APIClient()._handle_response(response) == (
+        False,
+        {"detail": "Incorrect email or password"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2026-10-16T06:00:00Z", "2026-10-16 14:00 SGT"),
+        ("2026-10-16T06:00:00+00:00", "2026-10-16 14:00 SGT"),
+        ("2026-10-16T06:00:00", "2026-10-16 14:00 SGT"),
+        ("", "N/A"),
+        (None, "N/A"),
+        ("not-a-date", "not-a-date"),
+    ],
+)
+def test_session_times_are_displayed_in_singapore_time(value, expected):
+    assert _format_singapore_time(value) == expected
 
 
 def test_overview_response_helpers_keep_exact_counts_and_valid_scores():

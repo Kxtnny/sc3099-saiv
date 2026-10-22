@@ -24,6 +24,19 @@ def _scheduled_time_utc(date_value: date, time_value: time) -> datetime:
     return local_datetime.astimezone(timezone.utc)
 
 
+def _format_singapore_time(value: Any) -> str:
+    """Show a backend UTC timestamp in Singapore time, matching the create form."""
+    if not isinstance(value, str) or not value:
+        return "N/A"
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(SINGAPORE_TIMEZONE).strftime("%Y-%m-%d %H:%M SGT")
+
+
 def _build_qr_image(secret: str):
     """Render the existing QR secret locally without sending it to a third party."""
     return qrcode.make(secret)
@@ -107,8 +120,8 @@ def render() -> None:
                 can_manage = can_manage_session(
                     user, s, courses_by_id.get(s.get("course_id"))
                 )
-                scheduled_start = s.get("scheduled_start", "")[:16].replace("T", " ")
-                scheduled_end = s.get("scheduled_end", "")[:16].replace("T", " ")
+                scheduled_start = _format_singapore_time(s.get("scheduled_start"))
+                scheduled_end = _format_singapore_time(s.get("scheduled_end"))
                 venue = s.get("venue_name") or "Campus Venue"
                 enrolled = s.get("total_enrolled") or 0
                 checked_in = s.get("checked_in_count") or 0
@@ -172,10 +185,10 @@ def render() -> None:
                                 else:
                                     st.error(f"Error: {update_res}")
 
+                    # Classroom QR Code Projector (the backend lets only session owners issue QR codes)
+                    qr_key = f"qr_open_{session_id}"
                     with btn_col2:
-                        # Classroom QR Code Projector
-                        qr_key = f"qr_open_{session_id}"
-                        if st.button("📱 Classroom QR Mode", key=f"btn_qr_{session_id}"):
+                        if can_manage and st.button("📱 Classroom QR Mode", key=f"btn_qr_{session_id}"):
                             st.session_state[qr_key] = not st.session_state.get(qr_key, False)
 
                     with btn_col3:
@@ -210,7 +223,7 @@ def render() -> None:
                                     st.error(f"Error: {del_res}")
 
                     # Classroom QR Display Section
-                    if st.session_state.get(qr_key, False):
+                    if can_manage and st.session_state.get(qr_key, False):
                         st.markdown("#### 📱 Live Classroom QR Code")
                         st.caption(
                             "Project this screen in class. The code rotates and automatically expires to prevent screenshot sharing."
@@ -227,11 +240,13 @@ def render() -> None:
                                         st.error(f"Error: {qr_data}")
 
                             if st.button("❌ Disable QR Code", key=f"clear_qr_{session_id}"):
-                                api_client.clear_session_qr(token, session_id)
-                                if f"qr_data_{session_id}" in st.session_state:
-                                    del st.session_state[f"qr_data_{session_id}"]
-                                st.info("QR code cleared.")
-                                st.rerun()
+                                ok_clear, clear_res = api_client.clear_session_qr(token, session_id)
+                                if ok_clear:
+                                    st.session_state.pop(f"qr_data_{session_id}", None)
+                                    set_flash_message("QR code cleared.", level="info")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error: {clear_res}")
 
                         with c_qr2:
                             current_qr = st.session_state.get(f"qr_data_{session_id}")
@@ -362,6 +377,7 @@ def render() -> None:
             session_desc = st.text_area("Description (Optional)", placeholder="Overview of lecture topics...")
 
             st.markdown("#### Schedule & Timing")
+            st.caption("Times are in Singapore time (SGT, UTC+8).")
             col_d1, col_d2 = st.columns(2)
             now_singapore = datetime.now(SINGAPORE_TIMEZONE)
             today = now_singapore.date()
@@ -370,11 +386,11 @@ def render() -> None:
 
             with col_d1:
                 date_val = st.date_input("Date *", value=today)
-                start_t = st.time_input("Scheduled Start *", value=now_time)
+                start_t = st.time_input("Scheduled Start (SGT) *", value=now_time)
             with col_d2:
                 st.write("")
                 st.write("")
-                end_t = st.time_input("Scheduled End *", value=end_time)
+                end_t = st.time_input("Scheduled End (SGT) *", value=end_time)
 
             st.markdown("#### Geolocation & Security Constraints")
             col_g1, col_g2, col_g3 = st.columns(3)

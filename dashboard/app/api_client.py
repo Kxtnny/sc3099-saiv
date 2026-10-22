@@ -72,7 +72,14 @@ class APIClient:
     def _handle_response(
         self, response: requests.Response
     ) -> Tuple[bool, Union[Dict[str, Any], List[Any], str]]:
-        if response.status_code == 401:
+        # A 401 on a bearer-token request means the session expired; a 401 on
+        # login/refresh (no token sent) carries a reason the user should see.
+        request = response.request
+        if (
+            response.status_code == 401
+            and request is not None
+            and request.headers.get("Authorization", "").startswith("Bearer ")
+        ):
             return False, "Your session has expired. Please sign in again."
         try:
             if response.status_code == 204:
