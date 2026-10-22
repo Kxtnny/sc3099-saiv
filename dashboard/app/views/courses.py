@@ -8,6 +8,8 @@ import streamlit as st
 
 from app.api_client import api_client
 from app.auth import get_token
+from app.views._downloads import render_csv_download, render_json_download
+from app.views._messages import set_flash_message
 
 
 def render() -> None:
@@ -60,16 +62,25 @@ def render() -> None:
     # Gradebook CSV Download
     col_dl1, col_dl2 = st.columns([3, 1])
     with col_dl2:
-        ok_csv, csv_data = api_client.export_course_csv(token, course_id)
-        if ok_csv and isinstance(csv_data, bytes):
-            st.download_button(
-                label="📥 Export Full Gradebook CSV",
-                data=csv_data,
-                file_name=f"gradebook_{selected_course.get('code', 'course')}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                type="primary",
-            )
+        render_csv_download(
+            token=token,
+            cache_key=f"course_{course_id}",
+            request_label="📥 Export Full Gradebook CSV",
+            download_label="Download Full Gradebook CSV",
+            file_name=f"gradebook_{selected_course.get('code', 'course')}.csv",
+            export=lambda: api_client.export_course_csv(token, course_id),
+            button_type="primary",
+            use_container_width=True,
+        )
+        render_json_download(
+            token=token,
+            cache_key=f"course_{course_id}",
+            request_label="📥 Export Gradebook JSON",
+            download_label="Download Gradebook JSON",
+            file_name=f"gradebook_{selected_course.get('code', 'course')}.json",
+            export=lambda: api_client.export_course_json(token, course_id),
+            use_container_width=True,
+        )
 
     st.markdown("---")
 
@@ -126,7 +137,7 @@ def render() -> None:
                         drop_id = enrollment_map[drop_student_label]
                         ok_drop, drop_res = api_client.delete_enrollment(token, drop_id)
                         if ok_drop:
-                            st.success(f"Student dropped from course.")
+                            set_flash_message("Student dropped from course.")
                             st.rerun()
                         else:
                             st.error(f"Error: {drop_res}")
@@ -178,7 +189,7 @@ def render() -> None:
                 )
 
             if ok_bulk and isinstance(bulk_res, dict):
-                st.success(
+                set_flash_message(
                     f"Enrollment processed: **{bulk_res.get('enrolled', 0)}** newly enrolled, "
                     f"**{bulk_res.get('already_enrolled', 0)}** already enrolled, "
                     f"**{bulk_res.get('created', 0)}** accounts created."
@@ -187,4 +198,3 @@ def render() -> None:
             else:
                 detail = bulk_res.get("detail", bulk_res) if isinstance(bulk_res, dict) else str(bulk_res)
                 st.error(f"Bulk enrollment failed: {detail}")
-

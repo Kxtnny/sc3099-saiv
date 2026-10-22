@@ -3,7 +3,8 @@ API Client for interacting with the SAIV Backend REST API and Prometheus.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+import threading
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import requests
 
 from app.config import (
@@ -24,6 +25,43 @@ class APIClient:
     def __init__(self, base_url: str = API_BASE_URL):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
+        self._refresh_lock = threading.Lock()
+        self._refresh_handler: Optional[Callable[[str], Optional[str]]] = None
+        self.session.hooks["response"].append(self._retry_after_unauthorized)
+
+    def set_refresh_handler(
+        self, handler: Callable[[str], Optional[str]]
+    ) -> None:
+        """Register the Streamlit-session callback used after an access-token 401."""
+        self._refresh_handler = handler
+
+    def _retry_after_unauthorized(
+        self, response: requests.Response, *args: Any, **kwargs: Any
+    ) -> requests.Response:
+        """Refresh and retry an authenticated request at most once."""
+        request = response.request
+        if (
+            response.status_code != 401
+            or request is None
+            or request.url.split("?", 1)[0].endswith("/auth/refresh")
+            or not self._refresh_handler
+        ):
+            return response
+
+        authorization = request.headers.get("Authorization", "")
+        if not authorization.startswith("Bearer "):
+            return response
+
+        with self._refresh_lock:
+            refreshed_token = self._refresh_handler(authorization[7:])
+        if not refreshed_token:
+            return response
+
+        retry_request = request.copy()
+        retry_request.headers["Authorization"] = f"Bearer {refreshed_token}"
+        retry_request.hooks["response"] = []
+        response.close()
+        return self.session.send(retry_request, **kwargs)
 
     def _headers(self, token: Optional[str] = None) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -34,6 +72,15 @@ class APIClient:
     def _handle_response(
         self, response: requests.Response
     ) -> Tuple[bool, Union[Dict[str, Any], List[Any], str]]:
+        # A 401 on a bearer-token request means the session expired; a 401 on
+        # login/refresh (no token sent) carries a reason the user should see.
+        request = response.request
+        if (
+            response.status_code == 401
+            and request is not None
+            and request.headers.get("Authorization", "").startswith("Bearer ")
+        ):
+            return False, "Your session has expired. Please sign in again."
         try:
             if response.status_code == 204:
                 return True, {}
@@ -165,6 +212,8 @@ class APIClient:
         course_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Tuple[bool, Any]:
         """List sessions with optional filters."""
         url = f"{self.base_url}/sessions/"
@@ -173,6 +222,10 @@ class APIClient:
             params["status"] = status
         if course_id:
             params["course_id"] = course_id
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         try:
             res = self.session.get(
                 url,
@@ -282,6 +335,8 @@ class APIClient:
         max_risk: Optional[float] = None,
         limit: int = 50,
         offset: int = 0,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Tuple[bool, Any]:
         """Query check-ins across courses with filters."""
         url = f"{self.base_url}/checkins/"
@@ -298,6 +353,10 @@ class APIClient:
             params["min_risk_score"] = min_risk
         if max_risk is not None:
             params["max_risk_score"] = max_risk
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
 
         try:
             res = self.session.get(
@@ -499,6 +558,17 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
+    def export_session_json(self, token: str, session_id: str) -> Tuple[bool, Any]:
+        """Download session attendance as JSON."""
+        url = f"{self.base_url}/export/session/{session_id}?format=json"
+        try:
+            res = self.session.get(
+                url, headers=self._headers(token), timeout=EXPORT_TIMEOUT
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
     def export_course_csv(self, token: str, course_id: str) -> Tuple[bool, Any]:
         """Download course attendance as CSV bytes."""
         url = f"{self.base_url}/export/attendance/{course_id}?format=csv"
@@ -509,6 +579,17 @@ class APIClient:
             if res.ok:
                 return True, res.content
             return False, res.text
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def export_course_json(self, token: str, course_id: str) -> Tuple[bool, Any]:
+        """Download course attendance as JSON."""
+        url = f"{self.base_url}/export/attendance/{course_id}?format=json"
+        try:
+            res = self.session.get(
+                url, headers=self._headers(token), timeout=EXPORT_TIMEOUT
+            )
+            return self._handle_response(res)
         except Exception as e:
             return False, f"Connection error: {e}"
 
@@ -572,6 +653,17 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
+    def export_audit_json(self, token: str) -> Tuple[bool, Any]:
+        """Download the audit trail as JSON."""
+        url = f"{self.base_url}/audit/export?format=json"
+        try:
+            res = self.session.get(
+                url, headers=self._headers(token), timeout=EXPORT_TIMEOUT
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
     # -------------------------------------------------------------------------
     # Observability, Health & Prometheus
     # -------------------------------------------------------------------------
@@ -617,4 +709,3 @@ class APIClient:
 
 # Singleton instance
 api_client = APIClient()
-

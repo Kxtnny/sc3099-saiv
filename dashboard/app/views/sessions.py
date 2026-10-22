@@ -2,12 +2,44 @@
 Session Management View - Create, manage, live QR code display, and session attendance export.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from hashlib import sha256
 from typing import Any, Dict, List, Optional
+import pandas as pd
+import qrcode
 import streamlit as st
 
 from app.api_client import api_client
-from app.auth import get_token
+from app.auth import can_create_sessions, can_manage_session, get_current_user, get_token
+from app.views._downloads import render_csv_download, render_json_download
+from app.views._messages import set_flash_message
+
+
+SINGAPORE_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Singapore")
+
+
+def _scheduled_time_utc(date_value: date, time_value: time) -> datetime:
+    """Interpret instructor input in Singapore time and convert it to UTC."""
+    local_datetime = datetime.combine(date_value, time_value, tzinfo=SINGAPORE_TIMEZONE)
+    return local_datetime.astimezone(timezone.utc)
+
+
+def _format_singapore_time(value: Any) -> str:
+    """Show a backend UTC timestamp in Singapore time, matching the create form."""
+    if not isinstance(value, str) or not value:
+        return "N/A"
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(SINGAPORE_TIMEZONE).strftime("%Y-%m-%d %H:%M SGT")
+
+
+def _build_qr_image(secret: str):
+    """Render the existing QR secret locally without sending it to a third party."""
+    return qrcode.make(secret)
 
 
 def render() -> None:
@@ -16,12 +48,20 @@ def render() -> None:
     st.caption("Schedule attendance windows, monitor live sessions, project classroom QR codes, and export records.")
 
     token = get_token()
-    if not token:
+    user = get_current_user()
+    if not token or not user:
         st.warning("Please sign in to manage sessions.")
         return
 
     # Tabs: Active & All Sessions vs Create Session
-    tab_list, tab_create = st.tabs(["📋 All Sessions", "➕ Create New Session"])
+    can_create = can_create_sessions(user)
+    tabs = st.tabs(
+        ["📋 All Sessions", "➕ Create New Session"]
+        if can_create
+        else ["📋 All Sessions"]
+    )
+    tab_list = tabs[0]
+    tab_create = tabs[1] if can_create else None
 
     # -------------------------------------------------------------------------
     # TAB 1: Session Listing & Controls
@@ -37,9 +77,12 @@ def render() -> None:
         with col_f2:
             ok_courses, courses_data = api_client.list_courses(token=token)
             course_map: Dict[str, Optional[str]] = {"All Courses": None}
+            courses_by_id: Dict[str, Dict[str, Any]] = {}
             if ok_courses and isinstance(courses_data, dict) and "items" in courses_data:
                 for c in courses_data["items"]:
                     course_map[f"{c.get('code', '')} - {c.get('name', '')}"] = c.get("id")
+                    if c.get("id"):
+                        courses_by_id[c["id"]] = c
             selected_course_label = st.selectbox("Filter by Course", options=list(course_map.keys()))
             filter_course_id = course_map[selected_course_label]
 
@@ -74,8 +117,11 @@ def render() -> None:
                 name = s.get("name", "Untitled")
                 course_code = s.get("course_code") or "Course"
                 status = s.get("status", "scheduled").lower()
-                scheduled_start = s.get("scheduled_start", "")[:16].replace("T", " ")
-                scheduled_end = s.get("scheduled_end", "")[:16].replace("T", " ")
+                can_manage = can_manage_session(
+                    user, s, courses_by_id.get(s.get("course_id"))
+                )
+                scheduled_start = _format_singapore_time(s.get("scheduled_start"))
+                scheduled_end = _format_singapore_time(s.get("scheduled_end"))
                 venue = s.get("venue_name") or "Campus Venue"
                 enrolled = s.get("total_enrolled") or 0
                 checked_in = s.get("checked_in_count") or 0
@@ -118,57 +164,66 @@ def render() -> None:
                     btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2, 2, 2, 2])
 
                     with btn_col1:
-                        if status == "scheduled":
+                        if can_manage and status == "scheduled":
                             if st.button("▶️ Start Session", key=f"start_{session_id}", type="primary"):
                                 ok_update, update_res = api_client.update_session(
                                     token, session_id, {"status": "active"}
                                 )
                                 if ok_update:
-                                    st.success("Session activated! Check-in is now open.")
+                                    set_flash_message("Session activated! Check-in is now open.")
                                     st.rerun()
                                 else:
                                     st.error(f"Error: {update_res}")
-                        elif status == "active":
+                        elif can_manage and status == "active":
                             if st.button("⏹️ Close Session", key=f"close_{session_id}"):
                                 ok_update, update_res = api_client.update_session(
                                     token, session_id, {"status": "closed"}
                                 )
                                 if ok_update:
-                                    st.success("Session closed.")
+                                    set_flash_message("Session closed.")
                                     st.rerun()
                                 else:
                                     st.error(f"Error: {update_res}")
 
+                    # Classroom QR Code Projector (the backend lets only session owners issue QR codes)
+                    qr_key = f"qr_open_{session_id}"
                     with btn_col2:
-                        # Classroom QR Code Projector
-                        qr_key = f"qr_open_{session_id}"
-                        if st.button("📱 Classroom QR Mode", key=f"btn_qr_{session_id}"):
+                        if can_manage and st.button("📱 Classroom QR Mode", key=f"btn_qr_{session_id}"):
                             st.session_state[qr_key] = not st.session_state.get(qr_key, False)
 
                     with btn_col3:
-                        # CSV Gradebook Export
-                        ok_csv, csv_content = api_client.export_session_csv(token, session_id)
-                        if ok_csv and isinstance(csv_content, bytes):
-                            st.download_button(
-                                label="📥 Export CSV",
-                                data=csv_content,
+                        csv_col, json_col = st.columns(2)
+                        with csv_col:
+                            render_csv_download(
+                                token=token,
+                                cache_key=f"session_{session_id}",
+                                request_label="📥 Export CSV",
+                                download_label="Download CSV",
                                 file_name=f"attendance_{course_code}_{name}.csv",
-                                mime="text/csv",
-                                key=f"dl_csv_{session_id}",
+                                export=lambda: api_client.export_session_csv(token, session_id),
+                            )
+                        with json_col:
+                            render_json_download(
+                                token=token,
+                                cache_key=f"session_{session_id}",
+                                request_label="📥 Export JSON",
+                                download_label="Download JSON",
+                                file_name=f"attendance_{course_code}_{name}.json",
+                                export=lambda: api_client.export_session_json(token, session_id),
                             )
 
                     with btn_col4:
-                        if status == "scheduled":
+                        if can_manage and status == "scheduled":
                             if st.button("🗑️ Delete Session", key=f"del_{session_id}"):
                                 ok_del, del_res = api_client.delete_session(token, session_id)
                                 if ok_del:
-                                    st.success("Session deleted.")
+                                    set_flash_message("Session deleted.")
                                     st.rerun()
                                 else:
                                     st.error(f"Error: {del_res}")
 
                     # Classroom QR Display Section
-                    if st.session_state.get(qr_key, False):
+                    if can_manage and st.session_state.get(qr_key, False):
                         st.markdown("#### 📱 Live Classroom QR Code")
                         st.caption(
                             "Project this screen in class. The code rotates and automatically expires to prevent screenshot sharing."
@@ -185,11 +240,13 @@ def render() -> None:
                                         st.error(f"Error: {qr_data}")
 
                             if st.button("❌ Disable QR Code", key=f"clear_qr_{session_id}"):
-                                api_client.clear_session_qr(token, session_id)
-                                if f"qr_data_{session_id}" in st.session_state:
-                                    del st.session_state[f"qr_data_{session_id}"]
-                                st.info("QR code cleared.")
-                                st.rerun()
+                                ok_clear, clear_res = api_client.clear_session_qr(token, session_id)
+                                if ok_clear:
+                                    st.session_state.pop(f"qr_data_{session_id}", None)
+                                    set_flash_message("QR code cleared.", level="info")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error: {clear_res}")
 
                         with c_qr2:
                             current_qr = st.session_state.get(f"qr_data_{session_id}")
@@ -198,18 +255,92 @@ def render() -> None:
                                 expires_at = current_qr.get("expires_at", "")[:19].replace("T", " ")
                                 ttl = current_qr.get("ttl_seconds", 180)
 
-                                qr_image_url = (
-                                    f"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={qr_secret}"
+                                st.image(
+                                    _build_qr_image(qr_secret),
+                                    caption="Scan using the SAIV Student App",
+                                    width=220,
                                 )
-                                st.image(qr_image_url, caption="Scan using the SAIV Student App", width=220)
                                 st.markdown(f"**Token:** `{qr_secret}`")
                                 st.markdown(f"**Expires At:** `{expires_at} UTC` (TTL: {ttl}s)")
                             else:
                                 st.info("Click 'Generate / Rotate QR' above to issue a one-time secret.")
 
+                    checkins_state_key = (
+                        f"session_checkins_{sha256(token.encode('utf-8')).hexdigest()}_{session_id}"
+                    )
+                    with st.expander("View session check-ins"):
+                        has_checkins = checkins_state_key in st.session_state
+                        if st.button(
+                            "🔄 Refresh check-ins" if has_checkins else "📋 Load check-ins",
+                            key=f"load_checkins_{session_id}",
+                        ):
+                            st.session_state.pop(checkins_state_key, None)
+                            with st.spinner("Loading session check-ins..."):
+                                ok_checkins, checkin_res = api_client.get_session_checkins(
+                                    token, session_id
+                                )
+                            if not ok_checkins:
+                                st.error(f"Failed to load session check-ins: {checkin_res}")
+                            elif not isinstance(checkin_res, list):
+                                st.error("Failed to load session check-ins: invalid response format.")
+                            else:
+                                st.session_state[checkins_state_key] = checkin_res
+
+                        if checkins_state_key in st.session_state:
+                            checkins = st.session_state[checkins_state_key]
+                            if not checkins:
+                                st.info("No check-ins recorded for this session.")
+                            else:
+                                checkin_rows = []
+                                for checkin in checkins:
+                                    distance = checkin.get("distance_from_venue_meters")
+                                    risk_score = checkin.get("risk_score")
+                                    checkin_rows.append(
+                                        {
+                                            "Student": checkin.get("student_name") or "N/A",
+                                            "Email": checkin.get("student_email") or "N/A",
+                                            "Status": checkin.get("status", "N/A").upper(),
+                                            "Risk Score": (
+                                                f"{risk_score:.2f}"
+                                                if isinstance(risk_score, (int, float))
+                                                else "N/A"
+                                            ),
+                                            "Distance": (
+                                                f"{distance:.1f}m"
+                                                if isinstance(distance, (int, float))
+                                                else "N/A"
+                                            ),
+                                            "Checked In At (UTC)": checkin.get(
+                                                "checked_in_at", ""
+                                            )[:19].replace("T", " "),
+                                            "Liveness": (
+                                                "Passed"
+                                                if checkin.get("liveness_passed") is True
+                                                else "Failed"
+                                                if checkin.get("liveness_passed") is False
+                                                else "N/A"
+                                            ),
+                                            "Trusted Device": (
+                                                "Yes"
+                                                if checkin.get("device_trusted") is True
+                                                else "No"
+                                                if checkin.get("device_trusted") is False
+                                                else "N/A"
+                                            ),
+                                        }
+                                    )
+                                st.dataframe(
+                                    pd.DataFrame(checkin_rows),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+
     # -------------------------------------------------------------------------
     # TAB 2: Create New Session
     # -------------------------------------------------------------------------
+    if tab_create is None:
+        return
+
     with tab_create:
         st.subheader("Schedule an Attendance Session")
         st.caption("Define the course, timing, geofence, and security thresholds for student check-ins.")
@@ -234,7 +365,7 @@ def render() -> None:
             with c_sel2:
                 session_type = st.selectbox(
                     "Session Type *",
-                    options=["lecture", "tutorial", "lab"],
+                    options=["lecture", "tutorial", "lab", "exam"],
                     index=0,
                 )
 
@@ -246,18 +377,20 @@ def render() -> None:
             session_desc = st.text_area("Description (Optional)", placeholder="Overview of lecture topics...")
 
             st.markdown("#### Schedule & Timing")
+            st.caption("Times are in Singapore time (SGT, UTC+8).")
             col_d1, col_d2 = st.columns(2)
-            today = datetime.now(timezone.utc).date()
-            now_time = (datetime.now(timezone.utc) + timedelta(minutes=5)).time()
-            end_time = (datetime.now(timezone.utc) + timedelta(hours=2)).time()
+            now_singapore = datetime.now(SINGAPORE_TIMEZONE)
+            today = now_singapore.date()
+            now_time = (now_singapore + timedelta(minutes=5)).time()
+            end_time = (now_singapore + timedelta(hours=2)).time()
 
             with col_d1:
                 date_val = st.date_input("Date *", value=today)
-                start_t = st.time_input("Scheduled Start *", value=now_time)
+                start_t = st.time_input("Scheduled Start (SGT) *", value=now_time)
             with col_d2:
                 st.write("")
                 st.write("")
-                end_t = st.time_input("Scheduled End *", value=end_time)
+                end_t = st.time_input("Scheduled End (SGT) *", value=end_time)
 
             st.markdown("#### Geolocation & Security Constraints")
             col_g1, col_g2, col_g3 = st.columns(3)
@@ -306,8 +439,8 @@ def render() -> None:
                 st.error("Please provide a session title.")
                 return
 
-            dt_start = datetime.combine(date_val, start_t, tzinfo=timezone.utc)
-            dt_end = datetime.combine(date_val, end_t, tzinfo=timezone.utc)
+            dt_start = _scheduled_time_utc(date_val, start_t)
+            dt_end = _scheduled_time_utc(date_val, end_t)
 
             if dt_end <= dt_start:
                 st.error("Scheduled end time must be after scheduled start time.")
@@ -318,8 +451,8 @@ def render() -> None:
                 "name": session_name.strip(),
                 "session_type": session_type,
                 "description": session_desc.strip() if session_desc else None,
-                "scheduled_start": dt_start.isoformat(),
-                "scheduled_end": dt_end.isoformat(),
+                "scheduled_start": dt_start.isoformat().replace("+00:00", "Z"),
+                "scheduled_end": dt_end.isoformat().replace("+00:00", "Z"),
                 "venue_name": venue_name.strip(),
                 "venue_latitude": venue_lat,
                 "venue_longitude": venue_lon,
@@ -333,9 +466,8 @@ def render() -> None:
                 ok_create, create_res = api_client.create_session(token, payload)
 
             if ok_create:
-                st.success(f"Session '{session_name}' created successfully!")
+                set_flash_message(f"Session '{session_name}' created successfully!")
                 st.rerun()
             else:
                 detail = create_res.get("detail", create_res) if isinstance(create_res, dict) else str(create_res)
                 st.error(f"Failed to create session: {detail}")
-

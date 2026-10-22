@@ -14,6 +14,7 @@ import streamlit as st
 
 from app.api_client import api_client
 from app.auth import (
+    can_view_audit,
     get_current_user,
     get_token,
     is_authenticated,
@@ -29,6 +30,7 @@ from app.views import (
     review_queue,
     sessions,
 )
+from app.views._messages import render_flash_message
 
 # Page configuration
 st.set_page_config(
@@ -69,6 +71,8 @@ def main() -> None:
         render_login_page()
         return
 
+    render_flash_message()
+
     # -------------------------------------------------------------------------
     # Sidebar Navigation & Branding
     # -------------------------------------------------------------------------
@@ -106,9 +110,10 @@ def main() -> None:
             f"🚨 Review Queue{flagged_badge}",
             "📋 Check-in Explorer",
             "🎓 Courses & Rosters",
-            "📜 Security Audit",
-            "📈 Observability",
         ]
+        if can_view_audit(user):
+            nav_options.append("📜 Security Audit")
+        nav_options.append("📈 Observability")
 
         selected_page = st.radio(
             "Navigation",
@@ -136,6 +141,9 @@ def main() -> None:
         audit.render()
     elif selected_page == "📈 Observability":
         observability.render()
+
+    if not is_authenticated():
+        st.rerun()
 
 
 if __name__ == "__main__":

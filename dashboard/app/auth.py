@@ -7,6 +7,7 @@ import streamlit as st
 
 from app.api_client import api_client
 from app.config import STAFF_ROLES
+from app.views._messages import render_flash_message, set_flash_message
 
 
 def init_session_state() -> None:
@@ -35,6 +36,71 @@ def get_current_user() -> Optional[Dict[str, Any]]:
     """Return user dictionary if authenticated."""
     init_session_state()
     return st.session_state.user
+
+
+def _refresh_expired_access_token(expired_access_token: str) -> Optional[str]:
+    """Rotate tokens once, or clear authentication and show an expiry message."""
+    current_token = st.session_state.get("access_token")
+    if current_token and current_token != expired_access_token:
+        return current_token
+
+    refresh_token = st.session_state.get("refresh_token")
+    if refresh_token:
+        ok, result = api_client.refresh_token(refresh_token)
+        if (
+            ok
+            and isinstance(result, dict)
+            and result.get("access_token")
+            and result.get("refresh_token")
+        ):
+            st.session_state.access_token = result["access_token"]
+            st.session_state.refresh_token = result["refresh_token"]
+            return result["access_token"]
+
+    st.session_state.access_token = None
+    st.session_state.refresh_token = None
+    st.session_state.user = None
+    set_flash_message(
+        "Your session has expired. Please sign in again.",
+        level="warning",
+    )
+    return None
+
+
+def can_view_audit(user: Optional[Dict[str, Any]]) -> bool:
+    """Audit data and exports are restricted to administrators."""
+    return bool(user and (user.get("role") or "").lower() == "admin")
+
+
+def can_create_sessions(user: Optional[Dict[str, Any]]) -> bool:
+    """Match the backend's instructor-or-admin session creation rule."""
+    return bool(
+        user and (user.get("role") or "").lower() in {"admin", "instructor"}
+    )
+
+
+def can_manage_session(
+    user: Optional[Dict[str, Any]],
+    session: Dict[str, Any],
+    course: Optional[Dict[str, Any]],
+) -> bool:
+    """Match the backend's admin, session-creator, or course-instructor rule."""
+    if not user:
+        return False
+    role = (user.get("role") or "").lower()
+    if role == "admin":
+        return True
+    if role not in {"instructor", "ta"}:
+        return False
+
+    user_id = user.get("id")
+    return bool(
+        user_id
+        and (
+            session.get("instructor_id") == user_id
+            or (course and course.get("instructor_id") == user_id)
+        )
+    )
 
 
 def logout_user() -> None:
@@ -69,6 +135,7 @@ def render_login_page() -> None:
         )
 
         with st.container(border=True):
+            render_flash_message()
             st.subheader("Sign In")
             st.caption("Access requires Instructor, TA, or Administrator credentials.")
 
@@ -101,7 +168,7 @@ def render_login_page() -> None:
                 st.session_state.access_token = data.get("access_token")
                 st.session_state.refresh_token = data.get("refresh_token")
                 st.session_state.user = user_info
-                st.success("Authentication successful! Redirecting...")
+                set_flash_message("Authentication successful.")
                 st.rerun()
 
 
@@ -141,3 +208,5 @@ def render_sidebar_user_profile() -> None:
         if st.button("🚪 Sign Out", use_container_width=True):
             logout_user()
 
+
+api_client.set_refresh_handler(_refresh_expired_access_token)

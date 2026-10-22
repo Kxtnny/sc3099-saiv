@@ -2,11 +2,35 @@
 Review Queue View - Review, investigate, and approve or reject flagged & appealed check-ins.
 """
 
-from typing import Any, Dict, List
+import math
+from numbers import Real
+from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from app.api_client import api_client
 from app.auth import get_token
+from app.views._messages import set_flash_message
+
+
+def _factor_score(risk_factor: Any) -> Optional[float]:
+    """Return the backend's weighted contribution when both inputs are valid."""
+    if not isinstance(risk_factor, dict):
+        return None
+
+    weight = risk_factor.get("weight")
+    confidence = risk_factor.get("confidence")
+    if (
+        isinstance(weight, bool)
+        or isinstance(confidence, bool)
+        or not isinstance(weight, Real)
+        or not isinstance(confidence, Real)
+        or not math.isfinite(weight)
+        or not math.isfinite(confidence)
+        or not 0 <= weight <= 1
+        or not 0 <= confidence <= 1
+    ):
+        return None
+    return float(weight * confidence)
 
 
 def render() -> None:
@@ -106,10 +130,22 @@ def render() -> None:
             if risk_factors:
                 st.markdown("**Factor Details:**")
                 for rf in risk_factors:
-                    rf_type = rf.get("type", "Signal").replace("_", " ").title()
-                    rf_score = rf.get("score", 0.0)
+                    if not isinstance(rf, dict):
+                        st.markdown("- **Risk factor unavailable** (missing or malformed data)")
+                        continue
+                    rf_type = rf.get("type", "Signal")
+                    if isinstance(rf_type, str):
+                        rf_type = rf_type.replace("_", " ").title()
+                    factor_score = _factor_score(rf)
+                    score_text = (
+                        f"{factor_score:.2f}"
+                        if factor_score is not None
+                        else "unavailable (weight/confidence missing or invalid)"
+                    )
                     rf_desc = rf.get("description") or rf.get("details") or ""
-                    st.markdown(f"- **{rf_type}** (Score: `{rf_score:.2f}`): {rf_desc}")
+                    st.markdown(
+                        f"- **{rf_type}** (Contribution: `{score_text}`): {rf_desc}"
+                    )
 
             # Appeal Reason (if under appeal)
             if appeal_reason:
@@ -140,7 +176,7 @@ def render() -> None:
                             review_notes=review_notes.strip() if review_notes else None,
                         )
                     if ok_rev:
-                        st.success(f"Check-in for {student_name} has been APPROVED.")
+                        set_flash_message(f"Check-in for {student_name} has been APPROVED.")
                         st.rerun()
                     else:
                         st.error(f"Error: {rev_res}")
@@ -157,8 +193,10 @@ def render() -> None:
                             review_notes=review_notes.strip() if review_notes else None,
                         )
                     if ok_rev:
-                        st.warning(f"Check-in for {student_name} has been marked REJECTED.")
+                        set_flash_message(
+                            f"Check-in for {student_name} has been marked REJECTED.",
+                            level="warning",
+                        )
                         st.rerun()
                     else:
                         st.error(f"Error: {rev_res}")
-
