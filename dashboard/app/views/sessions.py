@@ -268,7 +268,9 @@ def render() -> None:
                     checkins_state_key = (
                         f"session_checkins_{sha256(token.encode('utf-8')).hexdigest()}_{session_id}"
                     )
-                    with st.expander("View session check-ins"):
+                    # Already inside the session's expander, and Streamlit forbids nested expanders.
+                    st.markdown("#### 📋 Session Check-ins")
+                    with st.container(border=True):
                         has_checkins = checkins_state_key in st.session_state
                         if st.button(
                             "🔄 Refresh check-ins" if has_checkins else "📋 Load check-ins",
