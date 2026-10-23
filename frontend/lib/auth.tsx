@@ -22,6 +22,8 @@ interface AuthContextValue {
   logout: () => void;
   updateConsent: (patch: { camera_consent?: boolean; geolocation_consent?: boolean }) => Promise<void>;
   refreshUser: () => Promise<void>;
+  /** Record a successful face enrollment locally, without another request. */
+  markFaceEnrolled: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -85,8 +87,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     tokenStore.setUser(data);
   }, []);
 
+  const markFaceEnrolled = useCallback(() => {
+    setUser((u) => {
+      if (!u) return u;
+      const next = { ...u, face_enrolled: true };
+      tokenStore.setUser(next);
+      return next;
+    });
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, updateConsent, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, updateConsent, refreshUser, markFaceEnrolled }}>
       {children}
     </AuthContext.Provider>
   );

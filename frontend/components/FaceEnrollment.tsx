@@ -39,7 +39,7 @@ function describeEnrollError(err: unknown): { message: string; serviceDown: bool
  * The backend keeps only a hash of the face, never the image.
  */
 export default function FaceEnrollment({ onDone, onCancel, onSkip }: Props) {
-  const { refreshUser, user } = useAuth();
+  const { refreshUser, markFaceEnrolled, user } = useAuth();
   const { videoRef, ready, error: cameraError, stop } = useCameraStream('user');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,8 +58,10 @@ export default function FaceEnrollment({ onDone, onCancel, onSkip }: Props) {
     try {
       await api.post('/users/me/face/enroll', { image });
       stop();
-      // Pull the new face_enrolled flag into the app state.
-      await refreshUser().catch(() => {});
+      // The server confirmed enrollment, so update the app state right away.
+      // That moves the student on even if the profile refresh below fails.
+      markFaceEnrolled();
+      refreshUser().catch(() => {});
       onDone();
     } catch (err) {
       const { message, serviceDown: down } = describeEnrollError(err);

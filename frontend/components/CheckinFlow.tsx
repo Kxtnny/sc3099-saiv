@@ -92,9 +92,15 @@ export default function CheckinFlow() {
         longitude: position.longitude,
         location_accuracy_meters: position.accuracy,
         device_fingerprint: deviceFingerprint,
-        liveness_challenge_id: liveness.challengeId,
-        liveness_challenge_type: liveness.challengeType,
-        liveness_frames: liveness.frames,
+        // One clear frame for face matching, in both flows.
+        liveness_challenge_response: liveness.faceFrame,
+        ...(liveness.kind === 'challenge'
+          ? {
+              liveness_challenge_id: liveness.challengeId,
+              liveness_challenge_type: liveness.challengeType,
+              liveness_frames: liveness.frames,
+            }
+          : { liveness_challenge_type: 'passive' }),
         ...(session.qr_code_enabled ? { qr_code: qrCode.trim() } : {}),
       });
       setResult(data);
