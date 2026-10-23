@@ -35,18 +35,21 @@ interface Props {
 }
 
 // The server picks the action, so the prompt must follow challenge_type.
+// The face service needs the action held across several frames (eyes shut in
+// 2 in a row; head turned or mouth open in 3), so the wording asks for a
+// clear, held movement rather than a quick or slight one.
 const PROMPTS: Record<string, string> = {
-  blink: 'Blink slowly, twice',
-  head_turn: 'Turn your head slightly left, then back',
-  mouth_open: 'Open your mouth, then close it',
+  blink: 'Close your eyes for a moment, then open them. Do it twice.',
+  head_turn: 'Turn your head to the left and hold, then face the camera',
+  mouth_open: 'Open your mouth wide and hold, then close it',
 };
 const FALLBACK_PROMPT = 'Follow the prompt on screen';
 
 // Frames are sent to the backend in a single request (5 to 45 allowed), so
-// keep them small: about 24 frames of ~50 KB each.
-const GET_READY_MS = 1200; // look straight: the first frame is used for face match
-const RECORD_MS = 3000;
-const FRAME_INTERVAL_MS = 125;
+// keep them small: up to 45 frames of ~50 KB each (about 2.2 MB).
+const GET_READY_MS = 3000; // countdown with the action shown, so recording isn't spent reading it
+const RECORD_MS = 4500;
+const FRAME_INTERVAL_MS = 100; // 10 fps: a short eye closure still spans 2 frames
 const MIN_FRAMES = 5;
 const MAX_FRAMES = 45;
 const FRAME_QUALITY = 0.7;
@@ -61,6 +64,7 @@ export default function CameraCapture({ onCapture, onCancel }: Props) {
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState<Phase>('loading');
   const [progress, setProgress] = useState(0);
+  const [countdown, setCountdown] = useState(0);
   const [fallback, setFallback] = useState(false);
 
   // Ask for a fresh one-time challenge once the camera is running, so its
@@ -113,7 +117,7 @@ export default function CameraCapture({ onCapture, onCancel }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fallback]);
 
-  // Look straight, then record frames while the prompt is on screen.
+  // Count down with the action shown, then record frames while the student does it.
   useEffect(() => {
     if (!challenge) return;
     const { challenge_id, challenge_type } = challenge;
@@ -124,8 +128,11 @@ export default function CameraCapture({ onCapture, onCancel }: Props) {
 
     setPhase('ready');
     setProgress(0);
+    setCountdown(Math.ceil(GET_READY_MS / 1000));
+    const countdownTimer = setInterval(() => setCountdown((n) => Math.max(1, n - 1)), 1000);
 
     const startTimer = setTimeout(() => {
+      clearInterval(countdownTimer);
       // One clear frame at the end of the "look straight" step, before any
       // movement, for face matching. The recorded frames are lower quality.
       const faceFrame = grabFrame(videoRef.current, FACE_FRAME_QUALITY);
@@ -159,6 +166,7 @@ export default function CameraCapture({ onCapture, onCancel }: Props) {
     }, GET_READY_MS);
 
     return () => {
+      clearInterval(countdownTimer);
       clearTimeout(startTimer);
       clearTimeout(finishTimer);
       clearInterval(interval);
@@ -201,7 +209,16 @@ export default function CameraCapture({ onCapture, onCancel }: Props) {
       />
       <div className="mt-3 text-center" aria-live="polite">
         {(!ready || (phase === 'loading' && !fallback)) && <p className="text-sm text-gray-500">Starting liveness check…</p>}
-        {phase === 'ready' && <p className="text-sm font-medium text-gray-800">Look straight at the camera</p>}
+        {phase === 'ready' && (
+          <>
+            {/* Keep the face straight until recording: the face-match frame is taken as it starts. */}
+            <p className="text-sm font-medium text-gray-800">Look straight at the camera</p>
+            <p className="mt-1 text-sm text-gray-600">
+              Next: <span className="font-medium text-gray-900">{prompt}</span>
+            </p>
+            <p className="mt-2 text-3xl font-semibold text-blue-600 tabular-nums">{countdown}</p>
+          </>
+        )}
         {phase === 'fallback' && (
           <>
             <p className="text-sm font-medium text-gray-800">Look straight at the camera</p>

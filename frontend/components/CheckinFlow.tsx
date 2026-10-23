@@ -218,11 +218,14 @@ export default function CheckinFlow() {
   }
 
   if (step === 'already') {
+    // The backend allows one check-in per session whatever its outcome, so
+    // the earlier attempt may have been flagged or rejected: don't claim success.
     return (
-      <div role="status" className="rounded-lg border p-4 max-w-sm bg-green-50 border-green-300 text-green-800">
-        <p className="font-medium">You&rsquo;re checked in ✓</p>
+      <div role="status" className="rounded-lg border p-4 max-w-sm bg-blue-50 border-blue-300 text-blue-800">
+        <p className="font-medium">Check-in already submitted</p>
         <p className="text-sm mt-1">
-          {session ? `${session.name}: your` : 'Your'} attendance is already recorded. Nothing more to do.
+          {session ? `${session.name}: you` : 'You'} have already checked in to this session. See My
+          check-ins for its status.
         </p>
         <button onClick={reset} className="mt-3 text-sm underline">
           Done
