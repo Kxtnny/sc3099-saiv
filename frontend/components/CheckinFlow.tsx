@@ -92,9 +92,15 @@ export default function CheckinFlow() {
         longitude: position.longitude,
         location_accuracy_meters: position.accuracy,
         device_fingerprint: deviceFingerprint,
-        liveness_challenge_id: liveness.challengeId,
-        liveness_challenge_type: liveness.challengeType,
-        liveness_frames: liveness.frames,
+        // One clear frame for face matching, in both flows.
+        liveness_challenge_response: liveness.faceFrame,
+        ...(liveness.kind === 'challenge'
+          ? {
+              liveness_challenge_id: liveness.challengeId,
+              liveness_challenge_type: liveness.challengeType,
+              liveness_frames: liveness.frames,
+            }
+          : { liveness_challenge_type: 'passive' }),
         ...(session.qr_code_enabled ? { qr_code: qrCode.trim() } : {}),
       });
       setResult(data);
@@ -212,14 +218,11 @@ export default function CheckinFlow() {
   }
 
   if (step === 'already') {
-    // The backend allows one check-in per session whatever its outcome, so
-    // the earlier attempt may have been flagged or rejected: don't claim success.
     return (
-      <div role="status" className="rounded-lg border p-4 max-w-sm bg-blue-50 border-blue-300 text-blue-800">
-        <p className="font-medium">Check-in already submitted</p>
+      <div role="status" className="rounded-lg border p-4 max-w-sm bg-green-50 border-green-300 text-green-800">
+        <p className="font-medium">You&rsquo;re checked in ✓</p>
         <p className="text-sm mt-1">
-          {session ? `${session.name}: you` : 'You'} have already checked in to this session. See My
-          check-ins for its status.
+          {session ? `${session.name}: your` : 'Your'} attendance is already recorded. Nothing more to do.
         </p>
         <button onClick={reset} className="mt-3 text-sm underline">
           Done
