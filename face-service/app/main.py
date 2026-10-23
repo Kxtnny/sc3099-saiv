@@ -78,7 +78,7 @@ class FaceVerifyResponse(BaseModel):
     """Response model for face verification."""
     match_passed: bool
     match_score: float  # 0.0 to 1.0
-    match_threshold: float  # Default: 0.88
+    match_threshold: float  # Default: 0.62
     face_detected: bool
     current_template_hash: str
 
@@ -199,6 +199,9 @@ app.add_middleware(
 )
 
 recognizer = FaceRecognizer()
+# Loading ArcFace takes seconds, longer than the backend's check-in timeout,
+# so pay that cost at startup rather than on the first student's check-in.
+recognizer.warm_up()
 liveness = LivenessDetector()
 risk = RiskEngine()
 
@@ -254,13 +257,18 @@ def _resolve_challenge(request: LivenessRequest) -> str:
 
 
 def _first_face_hash(frames: List) -> str:
-    """Template of the first frame containing a detectable face."""
+    """
+    Template of the first frame containing a detectable face.
+
+    Only that one frame is encoded: ArcFace costs a few hundred ms per
+    attempt, and retrying across up to 45 frames could overrun the backend's
+    timeout for the whole liveness check.
+    """
     for frame in frames:
         detection = recognizer.locate_face(frame)
         if detection["detected"]:
-            return recognizer.to_simhash(
-                recognizer.encode_face(frame, detection["bbox"])
-            )
+            embedding = recognizer.encode_face(frame, detection["bbox"])
+            return recognizer.to_simhash(embedding) if embedding is not None else ""
     return ""
 
 
@@ -344,9 +352,13 @@ def enroll_face(request: FaceEnrollRequest):
     if not detection["detected"]:
         raise HTTPException(status_code=400, detail="No face detected")
 
-    template = recognizer.to_simhash(
-        recognizer.encode_face(image, detection["bbox"])
-    )
+    embedding = recognizer.encode_face(image, detection["bbox"])
+    if embedding is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract face features; use a clear, front-facing photo",
+        )
+    template = recognizer.to_simhash(embedding)
     logger.info(
         "enrolled user_id=%s confidence=%.2f",
         request.user_id,
@@ -404,9 +416,19 @@ def verify_face(request: FaceVerifyRequest):
             current_template_hash="",
         )
 
-    current = recognizer.to_simhash(
-        recognizer.encode_face(image, detection["bbox"])
-    )
+    embedding = recognizer.encode_face(image, detection["bbox"])
+    if embedding is None:
+        # A face is there but could not be embedded: never a match.
+        logger.info("verify match=False reason=no_embedding")
+        return FaceVerifyResponse(
+            match_passed=False,
+            match_score=0.0,
+            match_threshold=Config.FACE_MATCH_THRESHOLD,
+            face_detected=True,
+            current_template_hash="",
+        )
+
+    current = recognizer.to_simhash(embedding)
     score = recognizer.hamming_similarity(current, request.reference_template_hash)
     passed = score >= Config.FACE_MATCH_THRESHOLD
 
@@ -520,9 +542,8 @@ def check_liveness(request: LivenessRequest):
         return _to_liveness_response(result, "")
 
     result = liveness.score_single_frame(image, challenge)
-    face_hash = recognizer.to_simhash(
-        recognizer.encode_face(image, detection["bbox"])
-    )
+    embedding = recognizer.encode_face(image, detection["bbox"])
+    face_hash = recognizer.to_simhash(embedding) if embedding is not None else ""
     _record_liveness_metrics(result["liveness_passed"])
     return _to_liveness_response(result, face_hash)
 

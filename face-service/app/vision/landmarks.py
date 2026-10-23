@@ -1,3 +1,4 @@
+import threading
 from typing import Any, Dict
 
 import numpy as np
@@ -22,20 +23,32 @@ _MOUTH_RIGHT_CORNER = 308
 
 _MIN_LANDMARKS_FOR_COMPLETE_MESH = 400
 
+# One FaceMesh per worker thread: building the graph costs more than running
+# it, and a liveness check runs it on up to 45 frames. MediaPipe graphs are
+# not thread-safe, so they are not shared between request threads.
+_local = threading.local()
+
+
+def _face_mesh():
+    mesh = getattr(_local, "mesh", None)
+    if mesh is None:
+        mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            min_detection_confidence=Config.FACE_DETECTION_MIN_CONFIDENCE,
+        )
+        _local.mesh = mesh
+    return mesh
+
 
 def _landmark_list(image: np.ndarray):
     if mp is None:
         return None
 
-    with mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        min_detection_confidence=Config.FACE_DETECTION_MIN_CONFIDENCE,
-    ) as mesh:
-        result = mesh.process(image)
-        if not result.multi_face_landmarks:
-            return None
-        return list(result.multi_face_landmarks[0].landmark)
+    result = _face_mesh().process(image)
+    if not result.multi_face_landmarks:
+        return None
+    return list(result.multi_face_landmarks[0].landmark)
 
 
 def _distance(a, b) -> float:

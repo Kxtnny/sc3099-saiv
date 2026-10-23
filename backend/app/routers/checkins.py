@@ -491,17 +491,24 @@ def create_checkin(
                 face_score = match.get("match_score")
                 face_hash = match.get("current_template_hash") or face_hash
                 if face_passed is False:
+                    # Someone other than the enrolled student: reject outright,
+                    # as for failed liveness, however clean the other signals.
                     details = {"score": face_score}
                     if match.get("reason"):
                         details["reason"] = match["reason"]
-                    assessment.add(SignalType.FACE_MATCH_FAILED, details=details)
+                    assessment.add(
+                        SignalType.FACE_MATCH_FAILED, details=details, critical=True
+                    )
                 elif (
                     face_score is not None
                     and face_score < settings.FACE_MATCH_THRESHOLD
                 ):
+                    # Passed the face service's cutoff, but only just: an
+                    # instructor confirms it rather than auto-approving.
                     assessment.add(
                         SignalType.FACE_MATCH_LOW_CONFIDENCE,
                         details={"score": face_score},
+                        needs_review=True,
                     )
             else:
                 assessment.add(

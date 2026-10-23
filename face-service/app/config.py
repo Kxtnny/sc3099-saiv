@@ -1,3 +1,6 @@
+import os
+
+
 class Config:
     SERVICE_NAME = "SAIV Face Recognition Service"
     VERSION = "1.0.0"
@@ -7,8 +10,14 @@ class Config:
 
     SIMHASH_BITS = 256
     SIMHASH_SEED = 0x5A17
-    FACE_MATCH_THRESHOLD = 0.88
-    FALLBACK_EMBEDDING_SIZE = 64
+    # SimHash Hamming similarity estimates 1 - angle/pi between embeddings.
+    # 0.62 corresponds to an ArcFace cosine of about 0.36, the commonly
+    # published same-person cutoff. Provisional until calibrated on our users.
+    FACE_MATCH_THRESHOLD = 0.62
+
+    ARCFACE_MODEL_PACK = "buffalo_l"
+    ARCFACE_MODEL_ROOT = os.getenv("INSIGHTFACE_ROOT", "~/.insightface")
+    ARCFACE_DET_SIZE = (640, 640)
 
     LIVENESS_THRESHOLD = 0.60
     LIVENESS_DEPTH_WEIGHT = 0.30
