@@ -18,7 +18,7 @@ from app.auth import get_token
 
 
 SINGAPORE_TIMEZONE = ZoneInfo("Asia/Singapore")
-CHECKIN_STATUSES = ("approved", "flagged", "rejected")
+CHECKIN_STATUSES = ("approved", "flagged", "rejected", "pending", "appealed")
 RISK_SAMPLE_LIMIT = 100
 
 
@@ -66,6 +66,26 @@ def _risk_scores(items: Any) -> List[float]:
     return scores
 
 
+def _daily_counts(items: Any) -> List[Dict[str, Any]]:
+    """Aggregate a bounded, course-scoped check-in sample by Singapore day."""
+    if not isinstance(items, list):
+        return []
+    counts: Dict[str, int] = {}
+    for item in items:
+        checked_in_at = item.get("checked_in_at") if isinstance(item, dict) else None
+        if not isinstance(checked_in_at, str):
+            continue
+        try:
+            timestamp = datetime.fromisoformat(
+                checked_in_at.replace("Z", "+00:00")
+            ).astimezone(SINGAPORE_TIMEZONE)
+        except ValueError:
+            continue
+        day = timestamp.date().isoformat()
+        counts[day] = counts.get(day, 0) + 1
+    return [{"date": day, "count": count} for day, count in sorted(counts.items())]
+
+
 def render() -> None:
     """Render the Overview landing page."""
     st.title("📊 Attendance Overview")
@@ -101,7 +121,7 @@ def render() -> None:
     with col_btn:
         st.write("")
         st.write("")
-        refresh_clicked = st.button("🔄 Refresh", use_container_width=True)
+        st.button("🔄 Refresh", use_container_width=True)
 
     with st.spinner("Fetching system statistics..."):
         ok, stats = api_client.get_overview_stats(
@@ -110,6 +130,9 @@ def render() -> None:
 
     if not ok:
         st.error(f"Unable to load statistics: {stats}")
+        return
+    if not isinstance(stats, dict):
+        st.error("Unable to load statistics: the server returned an invalid response.")
         return
 
     period_end = datetime.now(timezone.utc)
@@ -130,6 +153,21 @@ def render() -> None:
             )
             for status in CHECKIN_STATUSES
         }
+        ok_today_checkins, today_checkins_response = api_client.list_checkins(
+            token=token,
+            course_id=selected_course_id,
+            start_date=today_start,
+            end_date=today_end,
+            limit=1,
+        )
+        ok_today_sample, today_sample_response = api_client.list_checkins(
+            token=token,
+            course_id=selected_course_id,
+            start_date=today_start,
+            end_date=today_end,
+            limit=100,
+            offset=0,
+        )
         ok_sample, sample_response = api_client.list_checkins(
             token=token,
             course_id=selected_course_id,
@@ -157,15 +195,26 @@ def render() -> None:
         if ok_today_sessions
         else None
     )
+    today_checkin_count = (
+        _total_from_response(today_checkins_response)
+        if ok_today_checkins
+        else None
+    )
+    st.caption(
+        f"Last updated: {datetime.now(SINGAPORE_TIMEZONE).strftime('%Y-%m-%d %H:%M:%S %Z')}."
+    )
 
     # Pending review alert
     flagged_count = stats.get("flagged_pending", 0)
     if flagged_count > 0:
         st.warning(
             f"🚨 **Attention Required:** There are **{flagged_count}** flagged check-in(s) "
-            f"awaiting review. Please navigate to the **Flagged Review Queue** to take action.",
+            "awaiting review. Open the review queue to take action.",
             icon="⚠️",
         )
+        if st.button("Open flagged review queue", type="primary"):
+            st.session_state["dashboard_page"] = "🚨 Review Queue"
+            st.rerun()
 
     # -------------------------------------------------------------------------
     # Key Metric Cards
@@ -191,18 +240,26 @@ def render() -> None:
             delta="Scheduled today (Singapore time)",
         )
     with m3:
-        today_checkins = stats.get("today_checkins", 0)
         week_checkins = stats.get("total_checkins_week", 0)
         st.metric(
             label="Today's Check-ins",
-            value=today_checkins,
+            value=(
+                today_checkin_count
+                if today_checkin_count is not None
+                else "Unavailable"
+            ),
             delta=f"{week_checkins} this week",
         )
     with m4:
-        approval_rate = stats.get("approval_rate", 0.0) * 100
+        approval_rate = stats.get("approval_rate")
         st.metric(
             label="Approval Rate",
-            value=f"{approval_rate:.1f}%",
+            value=(
+                f"{approval_rate * 100:.1f}%"
+                if isinstance(approval_rate, Real)
+                and not isinstance(approval_rate, bool)
+                else "Unavailable"
+            ),
             delta=f"Avg Risk: {stats.get('average_risk_score', 0.0):.2f}",
         )
     with m5:
@@ -229,7 +286,13 @@ def render() -> None:
 
     with chart_col1:
         st.subheader("Daily Attendance Volume")
-        trend_data = stats.get("trends", {}).get("checkins_by_day", [])
+        trend_data = (
+            _daily_counts(sample_response.get("items", []))
+            if selected_course_id
+            and ok_sample
+            and isinstance(sample_response, dict)
+            else stats.get("trends", {}).get("checkins_by_day", [])
+        )
         if trend_data:
             df_trends = pd.DataFrame(trend_data)
             df_trends["date"] = pd.to_datetime(df_trends["date"])
@@ -240,22 +303,30 @@ def render() -> None:
                 x="date",
                 y="count",
                 labels={"date": "Date", "count": "Check-in Count"},
-                title=f"Check-ins over past {time_window} days",
+                title=(
+                    f"Sampled check-ins over past {time_window} days"
+                    if selected_course_id
+                    else f"Check-ins over past {time_window} days"
+                ),
                 color_discrete_sequence=["#2563EB"],
             )
             fig_trend.update_layout(
                 xaxis_title="",
                 yaxis_title="Total Check-ins",
+                yaxis_rangemode="tozero",
                 margin=dict(l=20, r=20, t=40, b=20),
                 height=340,
             )
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
-            st.info("No check-in history recorded within the selected period.")
+            if selected_course_id and not ok_sample:
+                st.error("Unable to load course check-ins for the attendance trend.")
+            else:
+                st.info("No check-in history recorded within the selected period.")
 
     with chart_col2:
         st.subheader("Exact Check-in Outcomes")
-        outcome_columns = st.columns(3)
+        outcome_columns = st.columns(len(CHECKIN_STATUSES))
         for column, status in zip(outcome_columns, CHECKIN_STATUSES):
             with column:
                 count = outcome_counts[status]
@@ -264,7 +335,7 @@ def render() -> None:
                     count if count is not None else "Unavailable",
                 )
         st.caption(
-            f"Counts use actual check-in records for the selected {time_window}-day window."
+            f"Counts use actual records for the selected {time_window}-day window."
         )
         if any(value is None for value in outcome_counts.values()):
             st.warning("One or more outcome counts could not be loaded.")
@@ -292,6 +363,7 @@ def render() -> None:
             risk_figure.update_layout(
                 xaxis_title="Risk score (0–1)",
                 yaxis_title="Number of check-ins",
+                yaxis_rangemode="tozero",
                 bargap=0.05,
                 margin=dict(l=20, r=20, t=50, b=20),
             )
@@ -300,6 +372,58 @@ def render() -> None:
             st.info("No valid risk scores were returned for the selected window.")
 
     # -------------------------------------------------------------------------
+    # Today's check-in pattern
+    st.subheader("Today's Check-ins by Hour")
+    if not ok_today_sample or not isinstance(today_sample_response, dict):
+        st.error("Unable to load today's check-ins by hour.")
+    else:
+        today_sample_items = today_sample_response.get("items", [])
+        sample_items_valid = isinstance(today_sample_items, list)
+        if not sample_items_valid:
+            st.error("Today's check-in response had an invalid format.")
+            today_sample_items = []
+        hourly_counts = {hour: 0 for hour in range(24)}
+        for item in today_sample_items:
+            if not isinstance(item, dict):
+                continue
+            checked_in_at = item.get("checked_in_at")
+            if not isinstance(checked_in_at, str):
+                continue
+            try:
+                checkin_time = datetime.fromisoformat(
+                    checked_in_at.replace("Z", "+00:00")
+                ).astimezone(SINGAPORE_TIMEZONE)
+            except ValueError:
+                continue
+            hourly_counts[checkin_time.hour] += 1
+
+        if not sample_items_valid:
+            pass
+        elif today_checkin_count == 0 and not today_sample_items:
+            st.info("No check-ins have been recorded today.")
+        elif today_checkin_count is None and not today_sample_items:
+            st.warning("Today's check-in count is unavailable.")
+        else:
+            hour_df = pd.DataFrame(
+                [
+                    {"Hour (Singapore time)": f"{hour:02d}:00", "Check-ins": count}
+                    for hour, count in hourly_counts.items()
+                ]
+            )
+            hour_figure = px.bar(
+                hour_df,
+                x="Hour (Singapore time)",
+                y="Check-ins",
+                title="Hourly check-ins today (up to the latest 100 records)",
+                color_discrete_sequence=["#2563EB"],
+            )
+            hour_figure.update_layout(
+                yaxis_rangemode="tozero",
+                margin=dict(l=20, r=20, t=50, b=20),
+                height=320,
+            )
+            st.plotly_chart(hour_figure, use_container_width=True)
+
     # Recent Check-ins Quick Table
     # -------------------------------------------------------------------------
     st.markdown("### Recent Activity")
@@ -308,7 +432,9 @@ def render() -> None:
         course_id=selected_course_id,
         limit=10,
     )
-    if ok_recent and isinstance(recent_data, dict) and "items" in recent_data:
+    if not ok_recent:
+        st.error(f"Unable to load recent check-ins: {recent_data}")
+    elif isinstance(recent_data, dict) and isinstance(recent_data.get("items"), list):
         items = recent_data["items"]
         if items:
             table_rows = []
@@ -328,5 +454,26 @@ def render() -> None:
                 )
             df_recent = pd.DataFrame(table_rows)
             st.dataframe(df_recent, use_container_width=True, hide_index=True)
+            recent_options = {
+                f"#{item.get('id', '')[:8]} · "
+                f"{item.get('student_name') or item.get('student_email', 'Student')} · "
+                f"{item.get('status', '').upper()}": item.get("id")
+                for item in items
+                if item.get("id")
+            }
+            if recent_options:
+                selected_recent = st.selectbox(
+                    "Inspect a recent check-in",
+                    options=list(recent_options.keys()),
+                    key="overview_recent_checkin",
+                )
+                if st.button("Open selected check-in", key="overview_inspect_checkin"):
+                    st.session_state["checkin_target_id"] = recent_options[
+                        selected_recent
+                    ]
+                    st.session_state["dashboard_page"] = "📋 Check-in Explorer"
+                    st.rerun()
         else:
             st.caption("No recent check-ins found.")
+    else:
+        st.error("Unable to load recent check-ins: invalid response format.")

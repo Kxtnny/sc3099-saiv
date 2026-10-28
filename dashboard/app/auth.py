@@ -114,6 +114,7 @@ def logout_user() -> None:
     st.session_state.access_token = None
     st.session_state.refresh_token = None
     st.session_state.user = None
+    st.session_state.pop("checkin_target_id", None)
     st.rerun()
 
 

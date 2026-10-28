@@ -57,6 +57,23 @@ st.markdown(
     .stButton button {
         border-radius: 6px;
     }
+    @media (max-width: 700px) {
+        .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+        div[data-testid="stDataFrame"] {
+            max-width: 100%;
+            overflow-x: auto;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -93,21 +110,18 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-        # Check for pending flagged check-ins to show alert badge in menu
-        flagged_badge = ""
-        try:
-            ok_flag, flag_data = api_client.get_flagged_checkins(token=token, limit=1)
-            if ok_flag and isinstance(flag_data, dict):
-                flagged_count = flag_data.get("total", len(flag_data.get("items", [])))
-                if flagged_count > 0:
-                    flagged_badge = f" ({flagged_count})"
-        except Exception:
-            pass
+        # Check for pending flagged check-ins to show alert badge in menu.
+        ok_flag, flag_data = api_client.get_flagged_checkins(token=token, limit=1)
+        flagged_count = (
+            flag_data.get("total", len(flag_data.get("items", [])))
+            if ok_flag and isinstance(flag_data, dict)
+            else None
+        )
 
         nav_options = [
             "📊 Overview",
             "📅 Sessions",
-            f"🚨 Review Queue{flagged_badge}",
+            "🚨 Review Queue",
             "📋 Check-in Explorer",
             "🎓 Courses & Rosters",
         ]
@@ -118,8 +132,18 @@ def main() -> None:
         selected_page = st.radio(
             "Navigation",
             options=nav_options,
+            format_func=lambda page: (
+                f"{page} ({flagged_count})"
+                if page == "🚨 Review Queue"
+                and flagged_count is not None
+                and flagged_count > 0
+                else page
+            ),
             label_visibility="collapsed",
+            key="dashboard_page",
         )
+        if flagged_count is None:
+            st.caption("Review queue count is currently unavailable.")
 
         # User profile & logout button at bottom of sidebar
         render_sidebar_user_profile()
@@ -131,7 +155,7 @@ def main() -> None:
         overview.render()
     elif selected_page == "📅 Sessions":
         sessions.render()
-    elif selected_page.startswith("🚨 Review Queue"):
+    elif selected_page == "🚨 Review Queue":
         review_queue.render()
     elif selected_page == "📋 Check-in Explorer":
         checkins.render()

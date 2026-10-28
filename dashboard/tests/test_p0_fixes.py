@@ -15,13 +15,17 @@ from app.auth import (
     can_view_audit,
 )
 from app.views import _downloads
+from app.views import audit, checkins
 from app.views import observability
 from app.views import overview
 from app.views.review_queue import _factor_score
 from app.views.sessions import (
     _build_qr_image,
     _format_singapore_time,
+    _parse_singapore_datetime,
     _scheduled_time_utc,
+    _utc_date_bound as _session_utc_date_bound,
+    _utc_iso,
 )
 
 
@@ -40,6 +44,13 @@ def test_scheduled_time_is_interpreted_as_singapore_time():
     converted = _scheduled_time_utc(date(2026, 10, 16), time(9, 30))
 
     assert converted == datetime(2026, 10, 16, 1, 30, tzinfo=timezone.utc)
+
+
+def test_session_timestamp_helpers_round_trip_singapore_and_utc():
+    parsed = _parse_singapore_datetime("2026-10-16T01:30:00Z")
+
+    assert parsed.isoformat() == "2026-10-16T09:30:00+08:00"
+    assert _utc_iso(parsed) == "2026-10-16T01:30:00Z"
 
 
 def test_csv_export_is_requested_once_and_cached(monkeypatch):
@@ -151,7 +162,7 @@ def test_ta_session_controls_follow_backend_ownership_rules():
     course = {"instructor_id": "instructor-id"}
 
     assert not can_create_sessions(ta)
-    assert can_manage_session(ta, own_session, course)
+    assert not can_manage_session(ta, own_session, course)
     assert not can_manage_session(ta, other_session, course)
     assert not can_view_audit(ta)
     assert can_create_sessions({"id": "instructor-id", "role": "instructor"})
@@ -388,3 +399,123 @@ def test_p95_query_aggregates_histogram_buckets_across_endpoints():
         "histogram_quantile(0.95, sum by (le) "
         "(rate(http_request_duration_seconds_bucket[5m]))) * 1000"
     )
+
+
+def test_prometheus_missing_or_malformed_values_are_unavailable():
+    assert observability._extract_prom_value({"status": "success", "data": {"result": []}}) is None
+    assert observability._extract_prom_value(
+        {"status": "success", "data": {"result": [{"value": [1, "NaN"]}]}}
+    ) is None
+    assert observability._extract_prom_value(
+        {"status": "success", "data": {"result": [{"value": [1, "0"]}]}}
+    ) == 0
+    assert observability._extract_prom_series(
+        {
+            "status": "success",
+            "data": {
+                "result": [
+                    {"values": [[1792141200, "12.5"], [1792141500, "bad"]]}
+                ]
+            },
+        }
+    ) == [
+        {
+            "Time (UTC)": datetime.fromtimestamp(1792141200, timezone.utc),
+            "Value": 12.5,
+        }
+    ]
+
+
+def test_dashboard_api_client_passes_session_and_audit_filter_parameters():
+    client = APIClient("https://api.example.test/api/v1")
+    response = Mock(
+        ok=True,
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json=Mock(return_value={"items": [], "total": 0}),
+    )
+    client.session.get = Mock(return_value=response)
+
+    assert client.list_sessions(
+        "token",
+        course_id="course-1",
+        instructor_id="instructor-1",
+        start_date="2026-10-01T00:00:00Z",
+        end_date="2026-10-31T23:59:59Z",
+        limit=25,
+        offset=50,
+    ) == (True, {"items": [], "total": 0})
+    assert client.session.get.call_args.kwargs["params"] == {
+        "limit": 25,
+        "offset": 50,
+        "course_id": "course-1",
+        "instructor_id": "instructor-1",
+        "start_date": "2026-10-01T00:00:00Z",
+        "end_date": "2026-10-31T23:59:59Z",
+    }
+
+    assert client.list_audit_logs(
+        "token",
+        user_id="user-1",
+        action="login_failed",
+        resource_type="session",
+        resource_id="resource-1",
+        success=False,
+        start_date="2026-10-01T00:00:00Z",
+        end_date="2026-10-31T23:59:59Z",
+        limit=25,
+        offset=25,
+    ) == (True, {"items": [], "total": 0})
+    assert client.session.get.call_args.kwargs["params"] == {
+        "limit": 25,
+        "offset": 25,
+        "user_id": "user-1",
+        "action": "login_failed",
+        "resource_type": "session",
+        "resource_id": "resource-1",
+        "success": False,
+        "start_date": "2026-10-01T00:00:00Z",
+        "end_date": "2026-10-31T23:59:59Z",
+    }
+
+
+def test_prometheus_range_query_sends_time_range_and_step():
+    client = APIClient()
+    response = Mock(
+        ok=True,
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json=Mock(return_value={"status": "success", "data": {"result": []}}),
+    )
+    client.session.get = Mock(return_value=response)
+
+    assert client.query_prometheus_range(
+        "up", "2026-10-21T00:00:00Z", "2026-10-21T01:00:00Z", "60s"
+    ) == (True, {"status": "success", "data": {"result": []}})
+    assert client.session.get.call_args.args[0].endswith("/api/v1/query_range")
+    assert client.session.get.call_args.kwargs["params"] == {
+        "query": "up",
+        "start": "2026-10-21T00:00:00Z",
+        "end": "2026-10-21T01:00:00Z",
+        "step": "60s",
+    }
+
+
+def test_filter_date_helpers_include_the_full_selected_day():
+    expected = "2026-10-21T23:59:59.999999Z"
+    assert checkins._utc_date_bound(date(2026, 10, 21), end=True) == expected
+    assert audit._utc_date_bound(date(2026, 10, 21), end=True) == expected
+    assert _session_utc_date_bound(date(2026, 10, 21), end=True) == (
+        "2026-10-21T15:59:59.999999Z"
+    )
+
+
+def test_course_scoped_overview_trend_aggregates_singapore_dates():
+    assert overview._daily_counts(
+        [
+            {"checked_in_at": "2026-10-20T16:30:00Z"},
+            {"checked_in_at": "2026-10-20T18:30:00Z"},
+            {"checked_in_at": "not-a-timestamp"},
+            None,
+        ]
+    ) == [{"date": "2026-10-21", "count": 2}]

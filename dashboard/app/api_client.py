@@ -214,6 +214,7 @@ class APIClient:
         offset: int = 0,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        instructor_id: Optional[str] = None,
     ) -> Tuple[bool, Any]:
         """List sessions with optional filters."""
         url = f"{self.base_url}/sessions/"
@@ -222,6 +223,8 @@ class APIClient:
             params["status"] = status
         if course_id:
             params["course_id"] = course_id
+        if instructor_id:
+            params["instructor_id"] = instructor_id
         if start_date:
             params["start_date"] = start_date
         if end_date:
@@ -619,6 +622,10 @@ class APIClient:
         success: Optional[bool] = None,
         limit: int = 100,
         offset: int = 0,
+        resource_type: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Tuple[bool, Any]:
         """Query audit log entries."""
         url = f"{self.base_url}/audit/"
@@ -627,8 +634,16 @@ class APIClient:
             params["user_id"] = user_id
         if action:
             params["action"] = action
+        if resource_type:
+            params["resource_type"] = resource_type
+        if resource_id:
+            params["resource_id"] = resource_id
         if success is not None:
             params["success"] = success
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         try:
             res = self.session.get(
                 url,
@@ -701,6 +716,30 @@ class APIClient:
         try:
             res = self.session.get(
                 url, params={"query": query}, timeout=DEFAULT_TIMEOUT
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def query_prometheus_range(
+        self,
+        query: str,
+        start: str,
+        end: str,
+        step: str,
+    ) -> Tuple[bool, Any]:
+        """Execute a Prometheus range query for dashboard trend charts."""
+        url = f"{PROMETHEUS_URL.rstrip('/')}/api/v1/query_range"
+        try:
+            res = self.session.get(
+                url,
+                params={
+                    "query": query,
+                    "start": start,
+                    "end": end,
+                    "step": step,
+                },
+                timeout=DEFAULT_TIMEOUT,
             )
             return self._handle_response(res)
         except Exception as e:

@@ -59,11 +59,18 @@ def render() -> None:
         st.write("")
         st.button("🔄 Refresh Queue", key="btn_refresh_queue")
 
+    filter_signature = course_filter_id
+    if st.session_state.get("review_queue_filter_signature") != filter_signature:
+        st.session_state["review_queue_filter_signature"] = filter_signature
+        st.session_state["review_queue_page"] = 0
+    page = st.session_state.get("review_queue_page", 0)
+    page_limit = 50
     with st.spinner("Loading review queue..."):
         ok, res = api_client.get_flagged_checkins(
             token=token,
             course_id=course_filter_id,
-            limit=100,
+            limit=page_limit,
+            offset=page * page_limit,
         )
 
     if not ok:
@@ -71,6 +78,23 @@ def render() -> None:
         return
 
     items: List[Dict[str, Any]] = res.get("items", []) if isinstance(res, dict) else []
+    total = res.get("total", len(items)) if isinstance(res, dict) else len(items)
+    page_count = max(1, (total + page_limit - 1) // page_limit)
+    nav_prev, nav_page, nav_next = st.columns([1, 3, 1])
+    with nav_prev:
+        if st.button("← Previous", disabled=page <= 0, key="review_prev"):
+            st.session_state["review_queue_page"] = page - 1
+            st.rerun()
+    with nav_page:
+        st.caption(f"Page {page + 1} of {page_count} · {total} items to review")
+    with nav_next:
+        if st.button(
+            "Next →",
+            disabled=page + 1 >= page_count,
+            key="review_next",
+        ):
+            st.session_state["review_queue_page"] = page + 1
+            st.rerun()
 
     if not items:
         st.success("🎉 All clear! There are currently no flagged or appealed check-ins requiring review.")
