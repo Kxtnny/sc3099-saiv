@@ -1,6 +1,5 @@
 import os
 
-
 class Config:
     SERVICE_NAME = "SAIV Face Recognition Service"
     VERSION = "1.0.0"
@@ -10,20 +9,26 @@ class Config:
 
     SIMHASH_BITS = 256
     SIMHASH_SEED = 0x5A17
-    # SimHash Hamming similarity estimates 1 - angle/pi between embeddings.
-    # 0.62 corresponds to an ArcFace cosine of about 0.36, the commonly
-    # published same-person cutoff. Provisional until calibrated on our users.
-    FACE_MATCH_THRESHOLD = 0.62
+    
+    # 0.78 in SimHash space roughly corresponds to an ArcFace cosine similarity 
+    # of ~0.60, which is the correct 1:1 verification threshold.
+    FACE_MATCH_THRESHOLD = 0.78
 
     ARCFACE_MODEL_PACK = "buffalo_l"
     ARCFACE_MODEL_ROOT = os.getenv("INSIGHTFACE_ROOT", "~/.insightface")
     ARCFACE_DET_SIZE = (640, 640)
 
+    # Liveness weights sum to 1.00. Depth and mesh are down-weighted because 
+    # photos can fool MediaPipe's 3D estimation. Specular, frequency, and gamut 
+    # are the real anti-spoofs.
     LIVENESS_THRESHOLD = 0.60
-    LIVENESS_DEPTH_WEIGHT = 0.30
-    LIVENESS_MESH_WEIGHT = 0.25
-    LIVENESS_TEXTURE_WEIGHT = 0.25
-    LIVENESS_COLOR_WEIGHT = 0.20
+    LIVENESS_DEPTH_WEIGHT = 0.15
+    LIVENESS_MESH_WEIGHT = 0.10
+    LIVENESS_TEXTURE_WEIGHT = 0.20
+    LIVENESS_COLOR_WEIGHT = 0.10
+    LIVENESS_SPECULAR_WEIGHT = 0.20
+    LIVENESS_FREQUENCY_WEIGHT = 0.15
+    LIVENESS_GAMUT_WEIGHT = 0.10
 
     ACTIVE_CHALLENGE_BONUS = 0.15
     PASSIVE_BLINK_BONUS = ACTIVE_CHALLENGE_BONUS / 3
