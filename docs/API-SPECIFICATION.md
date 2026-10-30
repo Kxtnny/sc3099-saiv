@@ -370,7 +370,9 @@ List all sessions with filters. **Requires auth (instructor/admin).**
       "checkin_closes_at": "2024-01-15T14:30:00Z",
       "venue_name": "NTU LT1",
       "total_enrolled": 50,
-      "checked_in_count": 45
+      "checked_in_count": 45,  // Every check-in, including rejected ones
+      "attended_count": 44,    // Approved and flagged check-ins only
+      "by_status": {"approved": 42, "flagged": 2, "rejected": 1}
     }
   ],
   "total": 100,
@@ -491,6 +493,8 @@ Update a session. **Requires auth (instructor only, must be session owner).**
 - `scheduled` → `active`: Opens check-in window
 - `active` → `closed`: Closes check-in, finalizes attendance
 - Any status → `cancelled`: Cancels session
+
+These transitions also happen automatically: a `scheduled` session goes `active` at `scheduled_start`, and it closes once both `scheduled_end` and `checkin_closes_at` have passed. An instructor can still start or close a session early with this endpoint. Closed and cancelled sessions are never changed automatically.
 
 #### DELETE /sessions/{session_id}
 Delete a session. **Requires auth (instructor only, must be session owner).**

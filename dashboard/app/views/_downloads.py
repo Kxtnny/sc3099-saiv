@@ -2,7 +2,7 @@
 
 import json
 from hashlib import sha256
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import streamlit as st
 
@@ -17,6 +17,7 @@ def render_csv_download(
     export: Callable[[], Tuple[bool, Any]],
     button_type: str = "secondary",
     use_container_width: bool = False,
+    on_request: Optional[Callable[[], None]] = None,
 ) -> None:
     """Fetch CSV data only after an explicit request and retain it for download."""
     token_key = sha256(token.encode("utf-8")).hexdigest()
@@ -26,6 +27,7 @@ def render_csv_download(
         key=f"{state_key}_request",
         type=button_type,
         use_container_width=use_container_width,
+        on_click=on_request,
     ):
         st.session_state.pop(state_key, None)
         with st.spinner("Preparing CSV export..."):
@@ -60,6 +62,7 @@ def render_json_download(
     export: Callable[[], Tuple[bool, Any]],
     button_type: str = "secondary",
     use_container_width: bool = False,
+    on_request: Optional[Callable[[], None]] = None,
 ) -> None:
     """Fetch JSON only after a user request, then cache it for download."""
     token_key = sha256(token.encode("utf-8")).hexdigest()
@@ -69,6 +72,7 @@ def render_json_download(
         key=f"{state_key}_request",
         type=button_type,
         use_container_width=use_container_width,
+        on_click=on_request,
     ):
         st.session_state.pop(state_key, None)
         with st.spinner("Preparing JSON export..."):

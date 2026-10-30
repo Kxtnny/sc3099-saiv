@@ -11,9 +11,10 @@ instructor cannot alter another's session.
 import logging
 import secrets
 from datetime import timedelta
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
@@ -26,7 +27,13 @@ from app.dependencies import (
     require_instructor,
     require_staff,
 )
-from app.enums import AuditAction, CheckInStatus, SessionStatus, UserRole
+from app.enums import (
+    ATTENDED_CHECKIN_STATUSES,
+    AuditAction,
+    CheckInStatus,
+    SessionStatus,
+    UserRole,
+)
 from app.models import AttendanceSession, CheckIn, Course, Enrollment, User
 from app.schemas.common import PaginatedResponse
 from app.schemas.session import SessionCreate, SessionResponse, SessionUpdate
@@ -45,7 +52,7 @@ def _serialize(
     session: AttendanceSession,
     *,
     enrolled: Optional[int] = None,
-    checked_in: Optional[int] = None,
+    by_status: Optional[Dict[str, int]] = None,
 ) -> SessionResponse:
     payload = SessionResponse.model_validate(session)
     if session.course is not None:
@@ -64,8 +71,45 @@ def _serialize(
             payload.risk_threshold = session.course.risk_threshold
     payload.qr_code_enabled = session.qr_code_secret is not None
     payload.total_enrolled = enrolled
-    payload.checked_in_count = checked_in
+    if by_status is not None:
+        payload.by_status = by_status
+        payload.checked_in_count = sum(by_status.values())
+        payload.attended_count = sum(
+            by_status.get(attended, 0) for attended in ATTENDED_CHECKIN_STATUSES
+        )
     return payload
+
+
+def _serialize_with_counts(
+    db: Session, sessions: List[AttendanceSession]
+) -> List[SessionResponse]:
+    """Serialize a list with one grouped query per count, not one per session."""
+    enrolled = dict(
+        db.query(Enrollment.course_id, func.count(Enrollment.id))
+        .filter(
+            Enrollment.course_id.in_(list({s.course_id for s in sessions})),
+            Enrollment.is_active.is_(True),
+        )
+        .group_by(Enrollment.course_id)
+        .all()
+    )
+    by_status: Dict[str, Dict[str, int]] = {}
+    rows = (
+        db.query(CheckIn.session_id, CheckIn.status, func.count(CheckIn.id))
+        .filter(CheckIn.session_id.in_([s.id for s in sessions]))
+        .group_by(CheckIn.session_id, CheckIn.status)
+        .all()
+    )
+    for session_id, checkin_status, count in rows:
+        by_status.setdefault(session_id, {})[checkin_status] = count
+    return [
+        _serialize(
+            s,
+            enrolled=enrolled.get(s.course_id, 0),
+            by_status=by_status.get(s.id, {}),
+        )
+        for s in sessions
+    ]
 
 
 def _owns(user: User, session: AttendanceSession) -> bool:
@@ -112,7 +156,7 @@ def list_sessions(
         .limit(limit)
         .all()
     )
-    return paginate([_serialize(s) for s in sessions], total, limit, offset)
+    return paginate(_serialize_with_counts(db, sessions), total, limit, offset)
 
 
 @router.get("/active", response_model=List[SessionResponse])
@@ -174,7 +218,7 @@ def my_sessions(
     sessions = (
         query.order_by(AttendanceSession.scheduled_start.desc()).limit(limit).all()
     )
-    return [_serialize(s) for s in sessions]
+    return _serialize_with_counts(db, sessions)
 
 
 @router.get("/{session_id}", response_model=SessionResponse)
@@ -195,18 +239,7 @@ def get_session(
             status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
         )
 
-    enrolled = (
-        db.query(Enrollment)
-        .filter(
-            Enrollment.course_id == session.course_id,
-            Enrollment.is_active.is_(True),
-        )
-        .count()
-    )
-    checked_in = (
-        db.query(CheckIn).filter(CheckIn.session_id == session.id).count()
-    )
-    return _serialize(session, enrolled=enrolled, checked_in=checked_in)
+    return _serialize_with_counts(db, [session])[0]
 
 
 @router.post("/", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
@@ -220,7 +253,8 @@ def create_session(
     Schedule a session.
 
     New sessions start as `scheduled`; check-in only opens once the status
-    moves to `active`.
+    moves to `active`, which happens at scheduled_start or when an instructor
+    starts it early. See services/session_lifecycle.py.
     """
     course = db.query(Course).filter(Course.id == payload.course_id).first()
     if course is None:

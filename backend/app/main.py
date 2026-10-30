@@ -36,7 +36,7 @@ from app.routers import (
     stats,
     users,
 )
-from app.services import face_client, retention
+from app.services import face_client, retention, session_lifecycle
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -74,6 +74,13 @@ async def _retention_loop() -> None:
         await asyncio.to_thread(retention.run_sweep)
 
 
+async def _session_lifecycle_loop() -> None:
+    """Start and close sessions on schedule, catching up first after downtime."""
+    while True:
+        await asyncio.to_thread(session_lifecycle.run_sweep)
+        await asyncio.sleep(settings.SESSION_LIFECYCLE_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create the schema on startup, release connections on shutdown."""
@@ -101,10 +108,16 @@ async def lifespan(app: FastAPI):
             settings.DATA_RETENTION_DAYS,
         )
 
+    lifecycle = None
+    if settings.SESSION_LIFECYCLE_ENABLED:
+        lifecycle = asyncio.create_task(_session_lifecycle_loop())
+
     yield
 
     if sweeper is not None:
         sweeper.cancel()
+    if lifecycle is not None:
+        lifecycle.cancel()
     close_redis()
     logger.info("Shutdown complete")
 

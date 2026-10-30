@@ -5,6 +5,7 @@ Authentication & session state management for the Streamlit dashboard.
 from typing import Any, Dict, Optional
 import streamlit as st
 
+from app import browser_session
 from app.api_client import api_client
 from app.config import STAFF_ROLES
 from app.views._messages import render_flash_message, set_flash_message
@@ -18,6 +19,43 @@ def init_session_state() -> None:
         st.session_state.refresh_token = None
     if "user" not in st.session_state:
         st.session_state.user = None
+    if "browser_id" not in st.session_state:
+        st.session_state.browser_id = None
+
+
+def restore_login() -> None:
+    """Sign back in after a browser reload, which empties session state."""
+    init_session_state()
+    if is_authenticated():
+        return
+    recalled = browser_session.recall_login()
+    if recalled is None:
+        return
+    st.session_state.browser_id, login = recalled
+    st.session_state.access_token = login["access_token"]
+    st.session_state.refresh_token = login["refresh_token"]
+    st.session_state.user = login["user"]
+
+
+def sync_login_cookie() -> None:
+    """Point the browser's cookie at the current login, or remove it."""
+    browser_id = st.session_state.get("browser_id")
+    if browser_id:
+        browser_session.write_cookie(browser_id)
+    elif st.session_state.pop("clear_login_cookie", False):
+        browser_session.clear_cookie()
+
+
+def _clear_login() -> None:
+    """Drop this login from session state, the server store and the browser."""
+    browser_id = st.session_state.get("browser_id")
+    if browser_id:
+        browser_session.forget_login(browser_id)
+    st.session_state.browser_id = None
+    st.session_state.clear_login_cookie = True
+    st.session_state.access_token = None
+    st.session_state.refresh_token = None
+    st.session_state.user = None
 
 
 def is_authenticated() -> bool:
@@ -55,11 +93,18 @@ def _refresh_expired_access_token(expired_access_token: str) -> Optional[str]:
         ):
             st.session_state.access_token = result["access_token"]
             st.session_state.refresh_token = result["refresh_token"]
+            browser_id = st.session_state.get("browser_id")
+            if browser_id:
+                browser_session.update_login(
+                    browser_id,
+                    {
+                        "access_token": result["access_token"],
+                        "refresh_token": result["refresh_token"],
+                    },
+                )
             return result["access_token"]
 
-    st.session_state.access_token = None
-    st.session_state.refresh_token = None
-    st.session_state.user = None
+    _clear_login()
     set_flash_message(
         "Your session has expired. Please sign in again.",
         level="warning",
@@ -111,9 +156,7 @@ def logout_user() -> None:
             api_client.logout(token)
         except Exception:
             pass
-    st.session_state.access_token = None
-    st.session_state.refresh_token = None
-    st.session_state.user = None
+    _clear_login()
     st.rerun()
 
 
@@ -168,6 +211,13 @@ def render_login_page() -> None:
                 st.session_state.access_token = data.get("access_token")
                 st.session_state.refresh_token = data.get("refresh_token")
                 st.session_state.user = user_info
+                st.session_state.browser_id = browser_session.remember_login(
+                    {
+                        "access_token": data.get("access_token"),
+                        "refresh_token": data.get("refresh_token"),
+                        "user": user_info,
+                    }
+                )
                 set_flash_message("Authentication successful.")
                 st.rerun()
 

@@ -57,6 +57,11 @@ class CheckInStatus(StrEnum):
     APPEALED = "appealed"
 
 
+# Check-ins that count as the student being present. Flagged ones count until
+# an instructor rejects them; appealed ones wait for the outcome.
+ATTENDED_CHECKIN_STATUSES = (CheckInStatus.APPROVED.value, CheckInStatus.FLAGGED.value)
+
+
 class RiskLevel(StrEnum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"

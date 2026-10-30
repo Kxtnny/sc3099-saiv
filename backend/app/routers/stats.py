@@ -16,7 +16,12 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.utils import utcnow
 from app.dependencies import require_staff
-from app.enums import CheckInStatus, SessionStatus, UserRole
+from app.enums import (
+    ATTENDED_CHECKIN_STATUSES,
+    CheckInStatus,
+    SessionStatus,
+    UserRole,
+)
 from app.models import AttendanceSession, CheckIn, Course, Enrollment, User
 
 logger = logging.getLogger(__name__)
@@ -333,11 +338,7 @@ def student_stats(
         .order_by(CheckIn.checked_in_at.desc())
         .all()
     )
-    attended = sum(
-        1
-        for c in checkins
-        if c.status in (CheckInStatus.APPROVED.value, CheckInStatus.FLAGGED.value)
-    )
+    attended = sum(1 for c in checkins if c.status in ATTENDED_CHECKIN_STATUSES)
     average_risk = (
         sum(c.risk_score for c in checkins) / len(checkins) if checkins else 0.0
     )

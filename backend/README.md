@@ -237,6 +237,7 @@ touch:
 | `TRUSTED_PROXIES` | `*` (any) | peers whose `X-Forwarded-For` is honoured |
 | `SINGAPORE_ONLY_CHECKINS` | true | refuse check-ins from outside Singapore |
 | `FACE_CHECKIN_TIMEOUT` / `FACE_SEQUENCE_TIMEOUT` | 1.5 / 4.0 s | face calls for one frame / a challenge sequence |
+| `SESSION_LIFECYCLE_ENABLED` / `SESSION_LIFECYCLE_INTERVAL_SECONDS` | true / 15 | start and close sessions on schedule |
 | `DATA_RETENTION_DAYS` | 30 | purge window |
 | `QR_CODE_TTL_SECONDS` | 300 | how long an issued QR code is valid |
 | `CORS_ORIGINS` | :3000, :8501 | frontend and dashboard |
