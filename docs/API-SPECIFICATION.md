@@ -370,7 +370,9 @@ List all sessions with filters. **Requires auth (instructor/admin).**
       "checkin_closes_at": "2024-01-15T14:30:00Z",
       "venue_name": "NTU LT1",
       "total_enrolled": 50,
-      "checked_in_count": 45
+      "checked_in_count": 45,  // Every check-in, including rejected ones
+      "attended_count": 44,    // Approved and flagged check-ins only
+      "by_status": {"approved": 42, "flagged": 2, "rejected": 1}
     }
   ],
   "total": 100,

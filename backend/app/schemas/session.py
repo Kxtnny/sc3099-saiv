@@ -1,7 +1,7 @@
 """Attendance session schemas."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -104,7 +104,11 @@ class SessionResponse(BaseModel):
     qr_code_enabled: bool = False
 
     total_enrolled: Optional[int] = None
+    # Every check-in, whatever its outcome, as API-SPECIFICATION.md defines it.
     checked_in_count: Optional[int] = None
+    # Only the check-ins that count as the student being present.
+    attended_count: Optional[int] = None
+    by_status: Optional[Dict[str, int]] = None
 
     created_at: UTCDateTime
     updated_at: Optional[UTCDateTime] = None

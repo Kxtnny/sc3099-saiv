@@ -55,7 +55,11 @@ def render() -> None:
         st.metric("Total Sessions", stats_data.get("total_sessions", 0))
     with c3:
         avg_rate = stats_data.get("average_attendance_rate", 0.0) * 100
-        st.metric("Avg Attendance Rate", f"{avg_rate:.1f}%")
+        st.metric(
+            "Avg Check-in Rate",
+            f"{avg_rate:.1f}%",
+            help="All check-ins per enrolled student, including rejected ones.",
+        )
     with c4:
         st.metric("Flagged Check-ins", stats_data.get("flagged_checkins", 0))
 

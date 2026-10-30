@@ -68,6 +68,16 @@ def _keep_open(open_key: str) -> None:
     st.session_state[open_key] = True
 
 
+def _status_breakdown(by_status: Dict[str, int]) -> str:
+    """Outcome of a session's check-ins, such as " (42 approved, 1 rejected)"."""
+    parts = [
+        f"{count} {status}"
+        for status in ("approved", "flagged", "rejected", "appealed", "pending")
+        if (count := by_status.get(status))
+    ]
+    return f" ({', '.join(parts)})" if parts else ""
+
+
 def _build_qr_image(secret: str) -> bytes:
     """Render the QR secret locally, as PNG bytes that st.image can display."""
     buffer = BytesIO()
@@ -167,6 +177,7 @@ def render() -> None:
                 venue = s.get("venue_name") or "Campus Venue"
                 enrolled = s.get("total_enrolled") or 0
                 checked_in = s.get("checked_in_count") or 0
+                present = s.get("attended_count") or 0
 
                 status_color_map = {
                     "active": "🟢 ACTIVE",
@@ -201,9 +212,15 @@ def render() -> None:
 
                     with col_info3:
                         st.markdown(f"**Enrolled:** {enrolled} students")
-                        st.markdown(f"**Checked In:** {checked_in} students")
+                        st.markdown(
+                            f"**Present:** {present} students",
+                            help="Approved and flagged check-ins. A flagged student counts until an instructor rejects them.",
+                        )
+                        st.markdown(
+                            f"**Check-ins:** {checked_in}{_status_breakdown(s.get('by_status') or {})}"
+                        )
                         if enrolled > 0:
-                            pct = (checked_in / enrolled) * 100
+                            pct = (present / enrolled) * 100
                             st.progress(min(pct / 100, 1.0), text=f"Attendance: {pct:.1f}%")
 
                     if status == "scheduled":

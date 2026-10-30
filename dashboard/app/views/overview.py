@@ -228,7 +228,7 @@ def render() -> None:
     chart_col1, chart_col2 = st.columns([3, 2])
 
     with chart_col1:
-        st.subheader("Daily Attendance Volume")
+        st.subheader("Daily Check-in Volume")
         trend_data = stats.get("trends", {}).get("checkins_by_day", [])
         if trend_data:
             df_trends = pd.DataFrame(trend_data)
