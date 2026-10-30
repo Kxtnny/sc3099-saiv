@@ -7,7 +7,7 @@ SAIV attendance system.
 
 | Package | Contents |
 |---|---|
-| `app.vision`   | Face detection, dlib embedding, SimHash templates, MediaPipe landmarks, image decode |
+| `app.vision`   | Face detection, ArcFace embedding (InsightFace buffalo_l), SimHash templates, MediaPipe landmarks, image decode |
 | `app.liveness` | 4-component liveness scoring + active challenge detection |
 | `app.risk`     | Weighted multi-signal risk fusion |
 | `app.support`  | VPN / proxy heuristics |

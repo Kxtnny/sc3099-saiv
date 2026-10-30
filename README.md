@@ -178,9 +178,12 @@ curl $TEST_BACKEND_URL/health
 
 Some packages require system-level dependencies:
 
-- **face-recognition**: Requires `dlib` which needs `cmake` and C++ compiler
-  - macOS: `brew install cmake`
-  - Ubuntu: `sudo apt-get install cmake build-essential`
+- **insightface**: Builds a small C extension, so needs a C++ compiler, and is
+  installed with `--no-deps` from `face-service/requirements-nodeps.txt`
+  (its declared dependencies conflict with mediapipe). The Docker image also
+  bakes in the ArcFace model pack (`buffalo_l`).
+  - macOS: `xcode-select --install`
+  - Ubuntu: `sudo apt-get install build-essential`
 
 - **opencv-python**: Usually works out of the box, but may need:
   - Ubuntu: `sudo apt-get install libgl1-mesa-glx`

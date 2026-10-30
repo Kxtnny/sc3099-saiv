@@ -672,6 +672,20 @@ Get check-ins requiring review (flagged or appealed). **Requires auth (instructo
 ]
 ```
 
+#### GET /checkins/approved-flagged
+Get "approved with flag" check-ins: status `approved` with `risk_score >= 0.3` (MEDIUM band or above). They need no decision; an instructor acknowledges one by sending `POST /checkins/{id}/review` with `status: "approved"`, which keeps it approved and sets `reviewed_at`. **Requires auth (instructor/TA).**
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `course_id` | uuid | - | Filter by course |
+| `session_id` | uuid | - | Filter by session |
+| `include_acknowledged` | bool | false | Also return ones already acknowledged |
+| `limit` | int | 50 | Results per page |
+| `offset` | int | 0 | Pagination offset |
+
+**Response:** `200 OK` - Paginated list in the same shape as `/checkins/flagged`. List items now also carry `risk_level`, `approved_with_flag`, `reviewed_at` and `review_notes`.
+
 #### GET /checkins/{checkin_id}
 Get specific check-in details. **Requires auth (owner student, or instructor/TA for session).**
 

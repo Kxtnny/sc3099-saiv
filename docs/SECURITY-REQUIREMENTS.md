@@ -112,7 +112,8 @@ def check_rate_limit(key: str, limit: int, window: int) -> bool:
 |-----------|---------|-------|-------------|
 | Risk threshold | 0.5 | 0.0-1.0 | Check-in approval cutoff |
 | Liveness threshold | 0.6 | 0.0-1.0 | Liveness check pass |
-| Face match threshold | 0.7 | 0.0-1.0 | Face verification pass |
+| Face match reject threshold | 0.62 | 0.0-1.0 | Face service: below this the match fails and the check-in is rejected |
+| Face match review threshold | 0.67 | 0.0-1.0 | Backend: matches from 0.62 up to this are flagged for review |
 | Geofence radius | 100m | Configurable | Distance from venue |
 
 ### Signal Weights
