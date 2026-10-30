@@ -58,7 +58,7 @@ from app.schemas.checkin import (
 )
 from app.schemas.common import PaginatedResponse
 from app.schemas.device import DeviceCreate
-from app.services import face_client, rate_limit
+from app.services import device_trust, face_client, rate_limit
 from app.services.audit import log_action
 from app.routers.devices import register_device
 from app.services.audit import get_client_ip, get_user_agent
@@ -365,8 +365,31 @@ def create_checkin(
                 details={"reason": "device_shared_with_another_account"},
             )
             device = None
+        elif not device.is_active:
+            # Revoked: scored as new, and it cannot earn its way back.
+            assessment.add(
+                SignalType.DEVICE_UNKNOWN, details={"reason": "device_revoked"}
+            )
         elif not device.is_trusted:
-            assessment.add(SignalType.DEVICE_UNKNOWN, confidence=0.5)
+            clean = device_trust.clean_checkin_count(db, device)
+            if clean >= device_trust.CHECKINS_TO_EARN_TRUST:
+                device_trust.grant_trust(device)
+                log_action(
+                    db,
+                    AuditAction.DEVICE_TRUST_CHANGED,
+                    user_id=current_user.id,
+                    resource_type="device",
+                    resource_id=device.id,
+                    request=request,
+                    device_id=device.id,
+                    details={"is_trusted": True, "automatic": True},
+                )
+            else:
+                assessment.add(
+                    SignalType.DEVICE_UNKNOWN,
+                    confidence=0.5 if clean else 1.0,
+                    details={"clean_checkins": clean},
+                )
 
         if device is not None:
             device.last_seen_at = now

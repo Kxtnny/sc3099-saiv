@@ -54,3 +54,61 @@ def test_sessions_page_renders_session_panels_without_errors(monkeypatch, user):
 
     assert not app.exception, [e.message for e in app.exception]
     assert any("Session Check-ins" in m.value for m in app.markdown)
+
+
+DEVICE = {
+    "id": "device-1",
+    "user_email": "student@example.com",
+    "device_name": "Phone",
+    "is_trusted": False,
+    "is_active": True,
+    "clean_checkins": 2,
+    "total_checkins": 4,
+    "last_seen_at": "2026-10-16T06:00:00Z",
+}
+
+
+def _render_devices():
+    from app.views import devices
+
+    devices.render()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "visible", "hidden"),
+    [
+        ({}, "✅ Trust Device", "♻️ Reactivate Device"),
+        ({"is_trusted": True}, "↩️ Remove Trust", "✅ Trust Device"),
+        ({"is_active": False}, "♻️ Reactivate Device", "🚫 Revoke Device"),
+    ],
+)
+def test_device_page_offers_actions_for_the_device_state(monkeypatch, overrides, visible, hidden):
+    monkeypatch.setattr(
+        api_client,
+        "list_devices",
+        Mock(return_value=(True, {"items": [{**DEVICE, **overrides}], "total": 1})),
+    )
+
+    app = AppTest.from_function(_render_devices)
+    app.session_state["access_token"] = "access-token"
+    app.session_state["user"] = {"id": "admin-id", "role": "admin"}
+    app.run()
+
+    labels = [button.label for button in app.button]
+    assert not app.exception
+    assert visible in labels
+    assert hidden not in labels
+
+
+def test_device_page_is_refused_to_non_admins(monkeypatch):
+    list_devices = Mock(return_value=(True, {"items": [], "total": 0}))
+    monkeypatch.setattr(api_client, "list_devices", list_devices)
+
+    app = AppTest.from_function(_render_devices)
+    app.session_state["access_token"] = "access-token"
+    app.session_state["user"] = {"id": "instructor-id", "role": "instructor"}
+    app.run()
+
+    assert not app.exception
+    assert app.error[0].value == "Access restricted to Administrators."
+    list_devices.assert_not_called()

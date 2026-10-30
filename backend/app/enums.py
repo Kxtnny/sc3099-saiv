@@ -149,5 +149,6 @@ class AuditAction(StrEnum):
     COURSE_UPDATED = "course_updated"
     COURSE_DELETED = "course_deleted"
     DEVICE_REVOKED = "device_revoked"
+    DEVICE_TRUST_CHANGED = "device_trust_changed"
     DATA_PURGED = "data_purged"
     QR_GENERATED = "qr_generated"

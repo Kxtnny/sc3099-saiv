@@ -476,6 +476,55 @@ class APIClient:
             return False, f"Connection error: {e}"
 
     # -------------------------------------------------------------------------
+    # Devices
+    # -------------------------------------------------------------------------
+
+    def list_devices(
+        self,
+        token: str,
+        email: Optional[str] = None,
+        is_trusted: Optional[bool] = None,
+        is_active: Optional[bool] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[bool, Any]:
+        """List registered devices with their trust progress. Admin only."""
+        url = f"{self.base_url}/devices/"
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if email:
+            params["email"] = email
+        if is_trusted is not None:
+            params["is_trusted"] = is_trusted
+        if is_active is not None:
+            params["is_active"] = is_active
+        try:
+            res = self.session.get(
+                url,
+                headers=self._headers(token),
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def update_device(
+        self, token: str, device_id: str, payload: Dict[str, Any]
+    ) -> Tuple[bool, Any]:
+        """Change a device's trust or active state. Admin only."""
+        url = f"{self.base_url}/devices/{device_id}"
+        try:
+            res = self.session.patch(
+                url,
+                headers=self._headers(token),
+                json=payload,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    # -------------------------------------------------------------------------
     # Courses & Enrollments
     # -------------------------------------------------------------------------
 

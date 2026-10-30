@@ -35,6 +35,7 @@ class DeviceResponse(BaseModel):
 
     id: str
     user_id: str
+    user_email: Optional[str] = None  # admin device list only
     device_fingerprint: str
     device_name: Optional[str] = None
     platform: Optional[str] = None
@@ -43,5 +44,6 @@ class DeviceResponse(BaseModel):
     trust_score: str
     is_active: bool
     total_checkins: int
+    clean_checkins: Optional[int] = None  # admin device list only
     first_seen_at: UTCDateTime
     last_seen_at: UTCDateTime

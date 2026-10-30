@@ -108,7 +108,7 @@ Then it scores:
 | `liveness_failed` | 0.35 | face service says spoof; **critical** |
 | `face_match_failed` | 0.30 | face does not match enrolled template |
 | `rapid_succession` | 0.20 | another check-in < 30 s ago |
-| `device_unknown` | 0.15 | fingerprint never seen (auto-registered) |
+| `device_unknown` | 0.15 | device with no clean check-ins; half weight with 1-2; none once trusted after 3 |
 | `pattern_anomaly` | 0.15 | fingerprint belongs to another account |
 | `vpn_detected` | 0.15 | face service network analysis |
 | `geo_accuracy_low` | 0.10 | fix worse than 200 m, or no location |

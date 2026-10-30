@@ -10,7 +10,8 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.sanitize import sanitize_text
@@ -20,6 +21,7 @@ from app.enums import AuditAction, TrustScore, UserRole
 from app.models import Device, User
 from app.schemas.common import PaginatedResponse
 from app.schemas.device import DeviceCreate, DeviceResponse, DeviceUpdate
+from app.services import device_trust
 from app.services.audit import log_action
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,8 @@ def register_device(
 
     Fingerprints are globally unique. If one is already bound to a different
     account it is not silently reassigned - that would erase the evidence of a
-    shared device, which is exactly the signal the risk engine needs.
+    shared device, which is exactly the signal the risk engine needs. A revoked
+    device stays revoked: anyone logged in could otherwise undo the revocation.
     """
     existing = (
         db.query(Device)
@@ -50,7 +53,6 @@ def register_device(
                 detail="Device fingerprint already registered to another user",
             )
         existing.last_seen_at = utcnow()
-        existing.is_active = True
         if payload.device_name:
             existing.device_name = sanitize_text(payload.device_name)
         if payload.platform:
@@ -97,6 +99,7 @@ def my_devices(
 @router.get("/", response_model=PaginatedResponse[DeviceResponse])
 def list_devices(
     user_id: Optional[str] = None,
+    email: Optional[str] = None,
     is_trusted: Optional[bool] = None,
     is_active: Optional[bool] = None,
     limit: int = Query(default=50, ge=1, le=100),
@@ -105,10 +108,14 @@ def list_devices(
     db: Session = Depends(get_db),
 ):
     """List all devices. Admin only."""
-    query = db.query(Device)
+    query = db.query(Device).options(joinedload(Device.user))
 
     if user_id:
         query = query.filter(Device.user_id == user_id)
+    if email:
+        query = query.join(Device.user).filter(
+            func.lower(User.email).contains(email.strip().lower(), autoescape=True)
+        )
     if is_trusted is not None:
         query = query.filter(Device.is_trusted.is_(is_trusted))
     if is_active is not None:
@@ -118,9 +125,14 @@ def list_devices(
     devices = (
         query.order_by(Device.first_seen_at.desc()).offset(offset).limit(limit).all()
     )
-    return paginate(
-        [DeviceResponse.model_validate(d) for d in devices], total, limit, offset
-    )
+    clean_counts = device_trust.clean_checkin_counts(db, devices)
+    items = []
+    for device in devices:
+        item = DeviceResponse.model_validate(device)
+        item.user_email = device.user.email if device.user else None
+        item.clean_checkins = clean_counts.get(device.id, 0)
+        items.append(item)
+    return paginate(items, total, limit, offset)
 
 
 @router.post("/", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED)
@@ -166,8 +178,9 @@ def update_device(
     """
     Update a device.
 
-    Owners may rename or deactivate their own device; only an admin can mark
-    one trusted, since trust lowers the risk score of every future check-in.
+    Owners may rename or deactivate their own device. Only an admin can change
+    its trust, since trust lowers the risk score of every future check-in, or
+    reactivate it, since that would undo a revocation.
     """
     device = db.query(Device).filter(Device.id == device_id).first()
     if device is None:
@@ -187,16 +200,52 @@ def update_device(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only an administrator can change device trust",
         )
+    if changes.get("is_active") is True and not device.is_active and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an administrator can reactivate a device",
+        )
+    if changes.get("is_trusted") is True and not changes.get(
+        "is_active", device.is_active
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A revoked device cannot be trusted; reactivate it first",
+        )
 
     if changes.get("device_name"):
         changes["device_name"] = sanitize_text(changes["device_name"])
-    if changes.get("is_trusted") is True:
-        device.trust_score = TrustScore.HIGH.value
-    if changes.get("is_active") is False:
-        device.revoked_at = utcnow()
 
+    was_active = device.is_active
     for field, value in changes.items():
         setattr(device, field, value)
+
+    if changes.get("is_trusted") is False or device.is_active != was_active:
+        device_trust.reset_trust(device)
+    if changes.get("is_trusted") is True:
+        device_trust.grant_trust(device)
+    if device.is_active != was_active:
+        device.revocation_reason = (
+            None
+            if device.is_active
+            else "Revoked by administrator" if is_admin else "Revoked by user"
+        )
+
+    if "is_trusted" in changes or device.is_active != was_active:
+        log_action(
+            db,
+            AuditAction.DEVICE_TRUST_CHANGED,
+            user_id=current_user.id,
+            resource_type="device",
+            resource_id=device.id,
+            request=request,
+            device_id=device.id,
+            details={
+                "is_trusted": device.is_trusted,
+                "is_active": device.is_active,
+                "automatic": False,
+            },
+        )
 
     db.commit()
     db.refresh(device)
@@ -231,8 +280,7 @@ def delete_device(
         )
 
     device.is_active = False
-    device.is_trusted = False
-    device.revoked_at = utcnow()
+    device_trust.reset_trust(device)
     device.revocation_reason = "Revoked by user"
 
     log_action(
