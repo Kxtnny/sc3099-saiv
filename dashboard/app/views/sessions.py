@@ -5,7 +5,6 @@ Session Management View - Create, manage, live QR code display, and session atte
 from datetime import date, datetime, time, timedelta, timezone
 from functools import partial
 from hashlib import sha256
-from io import BytesIO
 from typing import Any, Dict, List, Optional
 import pandas as pd
 import qrcode
@@ -78,11 +77,9 @@ def _status_breakdown(by_status: Dict[str, int]) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
-def _build_qr_image(secret: str) -> bytes:
-    """Render the QR secret locally, as PNG bytes that st.image can display."""
-    buffer = BytesIO()
-    qrcode.make(secret).save(buffer, format="PNG")
-    return buffer.getvalue()
+def _build_qr_image(secret: str):
+    """Render the QR secret locally, unwrapped so that st.image can display it."""
+    return qrcode.make(secret).get_image()
 
 
 def _qr_expired(expires_at: Any) -> bool:
