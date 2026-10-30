@@ -22,11 +22,11 @@ class Config:
     # photos can fool MediaPipe's 3D estimation. Specular, frequency, and gamut 
     # are the real anti-spoofs.
     LIVENESS_THRESHOLD = 0.80
-    LIVENESS_DEPTH_WEIGHT = 0.25
+    LIVENESS_DEPTH_WEIGHT = 0.10
     LIVENESS_MESH_WEIGHT = 0.10
     LIVENESS_TEXTURE_WEIGHT = 0.20
     LIVENESS_COLOR_WEIGHT = 0.10
-    LIVENESS_SPECULAR_WEIGHT = 0.10
+    LIVENESS_SPECULAR_WEIGHT = 0.25
     LIVENESS_FREQUENCY_WEIGHT = 0.15
     LIVENESS_GAMUT_WEIGHT = 0.10
 
