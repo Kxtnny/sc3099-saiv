@@ -8,6 +8,7 @@ import streamlit as st
 
 from app.api_client import api_client
 from app.auth import get_token
+from app.views._time import format_singapore_time
 
 # Matches MEDIUM_RISK_FLOOR in backend/app/services/risk.py.
 APPROVED_WITH_FLAG_MIN_RISK = 0.3
@@ -132,7 +133,7 @@ def render() -> None:
                 "Distance": f"{c.get('distance_from_venue_meters', 0.0):.1f}m"
                 if c.get("distance_from_venue_meters") is not None
                 else "N/A",
-                "Timestamp (UTC)": c.get("checked_in_at", "")[:19].replace("T", " "),
+                "Timestamp": format_singapore_time(c.get("checked_in_at"), seconds=True),
             }
         )
 
@@ -168,7 +169,7 @@ def render() -> None:
                 risk_level = detail_data.get("risk_level")
                 level_text = f" ({risk_level})" if risk_level else ""
                 st.markdown(f"**Risk Score:** `{detail_data.get('risk_score', 0.0):.4f}`{level_text}")
-                st.markdown(f"**Timestamp:** `{detail_data.get('checked_in_at')}`")
+                st.markdown(f"**Timestamp:** `{format_singapore_time(detail_data.get('checked_in_at'), seconds=True)}`")
             with d3:
                 dist = detail_data.get("distance_from_venue_meters")
                 st.markdown(f"**Distance from Venue:** `{f'{dist:.1f} m' if dist is not None else 'N/A'}`")
@@ -189,7 +190,7 @@ def render() -> None:
             # Staff Review Notes if reviewed
             if detail_data.get("reviewed_at"):
                 st.info(
-                    f"**Staff Review ({detail_data.get('reviewed_at')[:19].replace('T', ' ')} UTC):**\n\n"
+                    f"**Staff Review ({format_singapore_time(detail_data.get('reviewed_at'), seconds=True)}):**\n\n"
                     f"Notes: {detail_data.get('review_notes') or 'None'}",
                     icon="ℹ️",
                 )

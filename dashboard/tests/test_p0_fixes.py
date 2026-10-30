@@ -17,10 +17,10 @@ from app.auth import (
 from app.views import _downloads
 from app.views import observability
 from app.views import overview
+from app.views._time import format_singapore_time
 from app.views.review_queue import _factor_score
 from app.views.sessions import (
     _build_qr_image,
-    _format_singapore_time,
     _scheduled_time_utc,
 )
 
@@ -357,7 +357,29 @@ def test_failed_login_shows_backend_reason_not_session_expiry():
     ],
 )
 def test_session_times_are_displayed_in_singapore_time(value, expected):
-    assert _format_singapore_time(value) == expected
+    assert format_singapore_time(value) == expected
+
+
+def test_singapore_time_can_include_seconds():
+    assert (
+        format_singapore_time("2026-10-23T07:06:35Z", seconds=True)
+        == "2026-10-23 15:06:35 SGT"
+    )
+
+
+def test_daily_counts_show_quiet_days_as_zero():
+    counts = overview._daily_counts(
+        [{"date": "2026-10-30", "count": 77}],
+        date(2026, 10, 28),
+        date(2026, 10, 30),
+    )
+
+    assert counts["count"].tolist() == [0, 0, 77]
+    assert counts["date"].dt.strftime("%Y-%m-%d").tolist() == [
+        "2026-10-28",
+        "2026-10-29",
+        "2026-10-30",
+    ]
 
 
 def test_overview_response_helpers_keep_exact_counts_and_valid_scores():

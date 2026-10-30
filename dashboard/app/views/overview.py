@@ -6,7 +6,6 @@ from datetime import date, datetime, time, timedelta, timezone
 import math
 from numbers import Real
 from typing import Any, Dict, List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -15,15 +14,28 @@ from streamlit_autorefresh import st_autorefresh
 
 from app.api_client import api_client
 from app.auth import get_token
+from app.views._time import SINGAPORE_TIMEZONE, format_singapore_time
 
 
-SINGAPORE_TIMEZONE = ZoneInfo("Asia/Singapore")
-CHECKIN_STATUSES = ("approved", "flagged", "rejected")
+CHECKIN_STATUSES = ("approved", "flagged", "appealed", "rejected")
 RISK_SAMPLE_LIMIT = 100
 
 
 def _schedule_auto_refresh() -> None:
     st_autorefresh(interval=30_000, key="overview_auto_refresh")
+
+
+def _daily_counts(trend_data: List[Dict[str, Any]], start: date, end: date) -> pd.DataFrame:
+    """
+    Check-ins per day with every day in the range present.
+
+    Quiet days show as zero rather than vanishing, and the chart axis stays in
+    days. With a single day of data, Plotly would zoom it to fractions of a second.
+    """
+    counts = pd.DataFrame(trend_data)
+    counts["date"] = pd.to_datetime(counts["date"])
+    days = pd.date_range(start, end, freq="D", name="date")
+    return counts.set_index("date")["count"].reindex(days, fill_value=0).reset_index()
 
 
 def _utc_iso(value: datetime) -> str:
@@ -162,8 +174,8 @@ def render() -> None:
     flagged_count = stats.get("flagged_pending", 0)
     if flagged_count > 0:
         st.warning(
-            f"🚨 **Attention Required:** There are **{flagged_count}** flagged check-in(s) "
-            f"awaiting review. Please navigate to the **Flagged Review Queue** to take action.",
+            f"🚨 **Attention Required:** There are **{flagged_count}** flagged or appealed "
+            f"check-in(s) awaiting a decision. Please navigate to the **Review Queue** to take action.",
             icon="⚠️",
         )
 
@@ -214,10 +226,11 @@ def render() -> None:
         )
     with m6:
         st.metric(
-            label="Flagged Queue",
+            label="Needs Review",
             value=flagged_count,
             delta="Pending review" if flagged_count > 0 else "All clear",
             delta_color="inverse" if flagged_count > 0 else "normal",
+            help="Flagged and appealed check-ins awaiting a decision, whatever their date.",
         )
 
     st.markdown("---")
@@ -231,9 +244,11 @@ def render() -> None:
         st.subheader("Daily Check-in Volume")
         trend_data = stats.get("trends", {}).get("checkins_by_day", [])
         if trend_data:
-            df_trends = pd.DataFrame(trend_data)
-            df_trends["date"] = pd.to_datetime(df_trends["date"])
-            df_trends = df_trends.sort_values("date")
+            df_trends = _daily_counts(
+                trend_data,
+                (period_end - timedelta(days=time_window)).date(),
+                period_end.date(),
+            )
 
             fig_trend = px.bar(
                 df_trends,
@@ -249,13 +264,14 @@ def render() -> None:
                 margin=dict(l=20, r=20, t=40, b=20),
                 height=340,
             )
+            fig_trend.update_xaxes(tickformat="%d %b")
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
             st.info("No check-in history recorded within the selected period.")
 
     with chart_col2:
         st.subheader("Exact Check-in Outcomes")
-        outcome_columns = st.columns(3)
+        outcome_columns = st.columns(len(CHECKIN_STATUSES))
         for column, status in zip(outcome_columns, CHECKIN_STATUSES):
             with column:
                 count = outcome_counts[status]
@@ -264,7 +280,8 @@ def render() -> None:
                     count if count is not None else "Unavailable",
                 )
         st.caption(
-            f"Counts use actual check-in records for the selected {time_window}-day window."
+            f"Counts use actual check-in records for the selected {time_window}-day window. "
+            "Needs Review above covers every date, so it can differ from these."
         )
         if any(value is None for value in outcome_counts.values()):
             st.warning("One or more outcome counts could not be loaded.")
@@ -323,7 +340,7 @@ def render() -> None:
                         "Distance": f"{item.get('distance_from_venue_meters', 0.0):.1f}m"
                         if item.get("distance_from_venue_meters") is not None
                         else "N/A",
-                        "Time": item.get("checked_in_at", "")[:19].replace("T", " "),
+                        "Time": format_singapore_time(item.get("checked_in_at"), seconds=True),
                     }
                 )
             df_recent = pd.DataFrame(table_rows)

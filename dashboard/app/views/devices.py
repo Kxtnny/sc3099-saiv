@@ -9,6 +9,7 @@ import streamlit as st
 from app.api_client import api_client
 from app.auth import can_manage_devices, get_current_user, get_token
 from app.views._messages import set_flash_message
+from app.views._time import format_singapore_time
 
 # Matches CHECKINS_TO_EARN_TRUST in backend/app/services/device_trust.py.
 CHECKINS_TO_EARN_TRUST = 3
@@ -95,7 +96,7 @@ def render() -> None:
                     "Device": d.get("device_name") or "N/A",
                     "Trust": _trust_label(d),
                     "Check-ins": d.get("total_checkins", 0),
-                    "Last Seen (UTC)": (d.get("last_seen_at") or "")[:19].replace("T", " "),
+                    "Last Seen": format_singapore_time(d.get("last_seen_at"), seconds=True),
                 }
                 for d in devices
             ]
