@@ -49,6 +49,7 @@ class Device(Base):
     total_checkins = Column(Integer, nullable=False, default=0)
 
     is_active = Column(Boolean, nullable=False, default=True, index=True)
+    # Also set when trust is removed: clean check-ins only count after this.
     revoked_at = Column(DateTime, nullable=True)
     revocation_reason = Column(Text, nullable=True)
 

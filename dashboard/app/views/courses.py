@@ -10,6 +10,7 @@ from app.api_client import api_client
 from app.auth import get_token
 from app.views._downloads import render_csv_download, render_json_download
 from app.views._messages import set_flash_message
+from app.views._time import format_singapore_time
 
 
 def render() -> None:
@@ -119,7 +120,7 @@ def render() -> None:
                             "Name": s.get("student_name", "N/A"),
                             "Email": s.get("student_email", "N/A"),
                             "Face Enrolled": "✅ Enrolled" if s.get("face_enrolled") else "⚪ Pending",
-                            "Enrolled At": s.get("enrolled_at", "")[:10] if s.get("enrolled_at") else "N/A",
+                            "Enrolled At": format_singapore_time(s.get("enrolled_at"))[:10],
                             "Status": "Active" if s.get("is_active") else "Dropped",
                         }
                     )

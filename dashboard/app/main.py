@@ -14,6 +14,7 @@ import streamlit as st
 
 from app.api_client import api_client
 from app.auth import (
+    can_manage_devices,
     can_view_audit,
     get_current_user,
     get_token,
@@ -27,6 +28,7 @@ from app.views import (
     audit,
     checkins,
     courses,
+    devices,
     observability,
     overview,
     review_queue,
@@ -72,6 +74,7 @@ PAGE_SLUGS = {
     "🚨 Review Queue": "review-queue",
     "📋 Check-in Explorer": "checkins",
     "🎓 Courses & Rosters": "courses",
+    "📱 Device Trust": "devices",
     "📜 Security Audit": "audit",
     "📈 Observability": "observability",
 }
@@ -133,6 +136,8 @@ def main() -> None:
             "📋 Check-in Explorer",
             "🎓 Courses & Rosters",
         ]
+        if can_manage_devices(user):
+            nav_options.append("📱 Device Trust")
         if can_view_audit(user):
             nav_options.append("📜 Security Audit")
         nav_options.append("📈 Observability")
@@ -169,6 +174,8 @@ def main() -> None:
         checkins.render()
     elif selected_page == "🎓 Courses & Rosters":
         courses.render()
+    elif selected_page == "📱 Device Trust":
+        devices.render()
     elif selected_page == "📜 Security Audit":
         audit.render()
     elif selected_page == "📈 Observability":

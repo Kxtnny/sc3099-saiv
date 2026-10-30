@@ -5,7 +5,6 @@ Session Management View - Create, manage, live QR code display, and session atte
 from datetime import date, datetime, time, timedelta, timezone
 from functools import partial
 from hashlib import sha256
-from io import BytesIO
 from typing import Any, Dict, List, Optional
 import pandas as pd
 import qrcode
@@ -15,9 +14,9 @@ from app.api_client import api_client
 from app.auth import can_create_sessions, can_manage_session, get_current_user, get_token
 from app.views._downloads import render_csv_download, render_json_download
 from app.views._messages import set_flash_message
+from app.views._time import SINGAPORE_TIMEZONE, format_singapore_time
 
 
-SINGAPORE_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Singapore")
 SCHEDULE_DEFAULTS_KEY = "create_session_schedule_defaults"
 
 
@@ -25,19 +24,6 @@ def _scheduled_time_utc(date_value: date, time_value: time) -> datetime:
     """Interpret instructor input in Singapore time and convert it to UTC."""
     local_datetime = datetime.combine(date_value, time_value, tzinfo=SINGAPORE_TIMEZONE)
     return local_datetime.astimezone(timezone.utc)
-
-
-def _format_singapore_time(value: Any) -> str:
-    """Show a backend UTC timestamp in Singapore time, matching the create form."""
-    if not isinstance(value, str) or not value:
-        return "N/A"
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(SINGAPORE_TIMEZONE).strftime("%Y-%m-%d %H:%M SGT")
 
 
 def _schedule_defaults() -> Dict[str, Any]:
@@ -78,11 +64,9 @@ def _status_breakdown(by_status: Dict[str, int]) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
-def _build_qr_image(secret: str) -> bytes:
-    """Render the QR secret locally, as PNG bytes that st.image can display."""
-    buffer = BytesIO()
-    qrcode.make(secret).save(buffer, format="PNG")
-    return buffer.getvalue()
+def _build_qr_image(secret: str):
+    """Render the QR secret locally, unwrapped so that st.image can display it."""
+    return qrcode.make(secret).get_image()
 
 
 def _qr_expired(expires_at: Any) -> bool:
@@ -172,8 +156,8 @@ def render() -> None:
                 can_manage = can_manage_session(
                     user, s, courses_by_id.get(s.get("course_id"))
                 )
-                scheduled_start = _format_singapore_time(s.get("scheduled_start"))
-                scheduled_end = _format_singapore_time(s.get("scheduled_end"))
+                scheduled_start = format_singapore_time(s.get("scheduled_start"))
+                scheduled_end = format_singapore_time(s.get("scheduled_end"))
                 venue = s.get("venue_name") or "Campus Venue"
                 enrolled = s.get("total_enrolled") or 0
                 checked_in = s.get("checked_in_count") or 0
@@ -329,7 +313,7 @@ def render() -> None:
                             current_qr = st.session_state.get(f"qr_data_{session_id}")
                             if current_qr:
                                 qr_secret = current_qr.get("qr_code", "")
-                                expires_at = current_qr.get("expires_at", "")[:19].replace("T", " ")
+                                expires_at = format_singapore_time(current_qr.get("expires_at"), seconds=True)
                                 ttl = current_qr.get("ttl_seconds", 180)
 
                                 if _qr_expired(current_qr.get("expires_at")):
@@ -344,7 +328,7 @@ def render() -> None:
                                     width=220,
                                 )
                                 st.markdown(f"**Token:** `{qr_secret}`")
-                                st.markdown(f"**Expires At:** `{expires_at} UTC` (TTL: {ttl}s)")
+                                st.markdown(f"**Expires At:** `{expires_at}` (TTL: {ttl}s)")
                             else:
                                 st.info("Click 'Generate / Rotate QR' above to issue a one-time secret.")
 
@@ -396,9 +380,9 @@ def render() -> None:
                                                 if isinstance(distance, (int, float))
                                                 else "N/A"
                                             ),
-                                            "Checked In At (UTC)": checkin.get(
-                                                "checked_in_at", ""
-                                            )[:19].replace("T", " "),
+                                            "Checked In At": format_singapore_time(
+                                                checkin.get("checked_in_at"), seconds=True
+                                            ),
                                             "Liveness": (
                                                 "Passed"
                                                 if checkin.get("liveness_passed") is True

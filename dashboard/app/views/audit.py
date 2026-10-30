@@ -9,6 +9,7 @@ import streamlit as st
 from app.api_client import api_client
 from app.auth import can_view_audit, get_current_user, get_token
 from app.views._downloads import render_csv_download, render_json_download
+from app.views._time import format_singapore_time
 
 
 def render() -> None:
@@ -131,7 +132,7 @@ def render() -> None:
         success = log.get("success", True)
         table_data.append(
             {
-                "Timestamp (UTC)": log.get("timestamp", "")[:19].replace("T", " "),
+                "Timestamp": format_singapore_time(log.get("timestamp"), seconds=True),
                 "Action": log.get("action", "").upper(),
                 "Outcome": "✅ SUCCESS" if success else "❌ FAILURE",
                 "User": log.get("user_email") or log.get("user_id") or "System / Anonymous",
@@ -148,7 +149,7 @@ def render() -> None:
     selected_log_idx = st.selectbox(
         "Select an event to view structured JSON payload:",
         options=range(len(logs)),
-        format_func=lambda i: f"{logs[i].get('timestamp', '')[:19]} | {logs[i].get('action')} | {logs[i].get('user_email', 'system')}",
+        format_func=lambda i: f"{format_singapore_time(logs[i].get('timestamp'), seconds=True)} | {logs[i].get('action')} | {logs[i].get('user_email', 'system')}",
     )
     if logs:
         st.json(logs[selected_log_idx])

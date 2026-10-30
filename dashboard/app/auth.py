@@ -117,6 +117,11 @@ def can_view_audit(user: Optional[Dict[str, Any]]) -> bool:
     return bool(user and (user.get("role") or "").lower() == "admin")
 
 
+def can_manage_devices(user: Optional[Dict[str, Any]]) -> bool:
+    """Match the backend's admin-only device list and trust controls."""
+    return bool(user and (user.get("role") or "").lower() == "admin")
+
+
 def can_create_sessions(user: Optional[Dict[str, Any]]) -> bool:
     """Match the backend's instructor-or-admin session creation rule."""
     return bool(

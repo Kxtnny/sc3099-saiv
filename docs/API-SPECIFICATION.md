@@ -902,6 +902,17 @@ Get attendance statistics for a specific student. **Requires auth (instructor fo
 
 Device management for security and trust scoring.
 
+#### Device trust
+A device earns trust from its owner's clean check-ins: approved with a risk score under 0.3.
+
+| Clean check-ins before this one | `device_unknown` added to risk |
+|---|---|
+| 0, or a revoked device | 0.15 |
+| 1-2 | 0.075 |
+| 3 or more | 0 (the device becomes `is_trusted: true`, `trust_score: "high"`) |
+
+Removing trust or revoking a device restarts its count from that moment. Re-registering a revoked device does not reactivate it; only an admin can, through `PATCH /devices/{device_id}`.
+
 #### POST /devices/register
 Register a new device. **Requires auth.**
 
@@ -965,6 +976,8 @@ Update device properties. **Requires auth (owner for name, admin for trust).**
   "is_active": false   // Deactivate device
 }
 ```
+
+An owner can deactivate their own device. Only an admin can reactivate one. A revoked device must be reactivated before it can be trusted.
 
 **Response:** `200 OK` - Returns updated device object
 
@@ -1144,6 +1157,7 @@ Get audit logs with comprehensive filtering. **Requires auth (admin only).**
 | `enrollment_added` | Student enrolled |
 | `enrollment_removed` | Enrollment removed |
 | `device_registered` | New device registered |
+| `device_trust_changed` | Device earned trust, or an admin changed it |
 | `face_enrolled` | Face enrollment completed |
 
 ---

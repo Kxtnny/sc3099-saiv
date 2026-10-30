@@ -11,6 +11,7 @@ import streamlit as st
 from app.api_client import api_client
 from app.auth import get_token
 from app.views._messages import set_flash_message
+from app.views._time import format_singapore_time
 
 
 def _factor_score(risk_factor: Any) -> Optional[float]:
@@ -42,7 +43,7 @@ def _render_header(item: Dict[str, Any], badge_text: str, badge_color: str) -> N
     session_name = item.get("session_name") or "Session"
     risk_score = item.get("risk_score", 0.0)
     risk_level = item.get("risk_level")
-    timestamp = item.get("checked_in_at", "")[:19].replace("T", " ")
+    timestamp = format_singapore_time(item.get("checked_in_at"), seconds=True)
 
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
@@ -50,7 +51,7 @@ def _render_header(item: Dict[str, Any], badge_text: str, badge_color: str) -> N
             f"### {student_name} (`{student_email}`) — <span style='color:{badge_color}; font-size:1.1rem; font-weight:700;'>{badge_text}</span>",
             unsafe_allow_html=True,
         )
-        st.caption(f"Course: **{course_code}** | Session: **{session_name}** | Time: **{timestamp} UTC**")
+        st.caption(f"Course: **{course_code}** | Session: **{session_name}** | Time: **{timestamp}**")
 
     with head_col2:
         risk_pct = risk_score * 100
@@ -131,7 +132,7 @@ def _render_decision_card(item: Dict[str, Any], token: str) -> None:
     student_name = item.get("student_name") or item.get("student_email") or "Student"
     status = item.get("status", "flagged").lower()
     appeal_reason = item.get("appeal_reason")
-    appealed_at = item.get("appealed_at", "")[:19].replace("T", " ") if item.get("appealed_at") else None
+    appealed_at = format_singapore_time(item.get("appealed_at"), seconds=True)
 
     # Color badges
     badge_text = "🚨 FLAGGED" if status == "flagged" else "📩 UNDER APPEAL"
@@ -143,7 +144,7 @@ def _render_decision_card(item: Dict[str, Any], token: str) -> None:
 
         # Appeal Reason (if under appeal)
         if appeal_reason:
-            st.info(f"**Student's Appeal Explanation ({appealed_at} UTC):**\n\n> {appeal_reason}", icon="📝")
+            st.info(f"**Student's Appeal Explanation ({appealed_at}):**\n\n> {appeal_reason}", icon="📝")
 
         st.markdown("---")
 
@@ -196,7 +197,7 @@ def _render_flag_card(item: Dict[str, Any], token: str) -> None:
 
         if reviewed_at:
             st.info(
-                f"**Acknowledged {reviewed_at[:19].replace('T', ' ')} UTC.** "
+                f"**Acknowledged {format_singapore_time(reviewed_at, seconds=True)}.** "
                 f"Notes: {item.get('review_notes') or 'None'}",
                 icon="ℹ️",
             )
