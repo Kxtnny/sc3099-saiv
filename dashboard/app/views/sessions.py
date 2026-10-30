@@ -3,7 +3,9 @@ Session Management View - Create, manage, live QR code display, and session atte
 """
 
 from datetime import date, datetime, time, timedelta, timezone
+from functools import partial
 from hashlib import sha256
+from io import BytesIO
 from typing import Any, Dict, List, Optional
 import pandas as pd
 import qrcode
@@ -16,6 +18,7 @@ from app.views._messages import set_flash_message
 
 
 SINGAPORE_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Singapore")
+SCHEDULE_DEFAULTS_KEY = "create_session_schedule_defaults"
 
 
 def _scheduled_time_utc(date_value: date, time_value: time) -> datetime:
@@ -37,9 +40,48 @@ def _format_singapore_time(value: Any) -> str:
     return parsed.astimezone(SINGAPORE_TIMEZONE).strftime("%Y-%m-%d %H:%M SGT")
 
 
-def _build_qr_image(secret: str):
-    """Render the existing QR secret locally without sending it to a third party."""
-    return qrcode.make(secret)
+def _schedule_defaults() -> Dict[str, Any]:
+    """
+    Default date and times for the create form, chosen once.
+
+    Streamlit hashes a widget's default into its identity. A default read from
+    the clock on every run makes each run a different widget, so the form
+    forgets what the instructor entered as soon as they submit it.
+    """
+    if SCHEDULE_DEFAULTS_KEY not in st.session_state:
+        now = datetime.now(SINGAPORE_TIMEZONE).replace(second=0, microsecond=0)
+        st.session_state[SCHEDULE_DEFAULTS_KEY] = {
+            "date": now.date(),
+            "start": (now + timedelta(minutes=5)).time(),
+            "end": (now + timedelta(hours=2)).time(),
+        }
+    return st.session_state[SCHEDULE_DEFAULTS_KEY]
+
+
+def _keep_open(open_key: str) -> None:
+    """
+    Keep a session's expander open across the rerun a button inside it causes.
+
+    Runs as a button callback, because the expander is drawn before the code
+    that handles the click, and a rerun collapses one that starts closed.
+    """
+    st.session_state[open_key] = True
+
+
+def _build_qr_image(secret: str) -> bytes:
+    """Render the QR secret locally, as PNG bytes that st.image can display."""
+    buffer = BytesIO()
+    qrcode.make(secret).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _qr_expired(expires_at: Any) -> bool:
+    """True once a backend expiry timestamp has passed."""
+    try:
+        parsed = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed <= datetime.now(timezone.utc)
 
 
 def render() -> None:
@@ -134,7 +176,13 @@ def render() -> None:
                 }
                 status_badge = status_color_map.get(status, status.upper())
 
-                with st.expander(f"**{course_code}: {name}** — {status_badge} ({scheduled_start})", expanded=(status == "active")):
+                open_key = f"session_open_{session_id}"
+                keep_open = partial(_keep_open, open_key)
+
+                with st.expander(
+                    f"**{course_code}: {name}** — {status_badge} ({scheduled_start})",
+                    expanded=status == "active" or st.session_state.get(open_key, False),
+                ):
                     col_info1, col_info2, col_info3 = st.columns([2, 2, 2])
 
                     with col_info1:
@@ -157,6 +205,14 @@ def render() -> None:
                         if enrolled > 0:
                             pct = (checked_in / enrolled) * 100
                             st.progress(min(pct / 100, 1.0), text=f"Attendance: {pct:.1f}%")
+
+                    if status == "scheduled":
+                        st.caption(
+                            f"Starts automatically at {scheduled_start} and closes after {scheduled_end}. "
+                            "Use Start Session to open check-in early."
+                        )
+                    elif status == "active":
+                        st.caption(f"Closes automatically after {scheduled_end}.")
 
                     st.markdown("---")
 
@@ -188,7 +244,9 @@ def render() -> None:
                     # Classroom QR Code Projector (the backend lets only session owners issue QR codes)
                     qr_key = f"qr_open_{session_id}"
                     with btn_col2:
-                        if can_manage and st.button("📱 Classroom QR Mode", key=f"btn_qr_{session_id}"):
+                        if can_manage and st.button(
+                            "📱 Classroom QR Mode", key=f"btn_qr_{session_id}", on_click=keep_open
+                        ):
                             st.session_state[qr_key] = not st.session_state.get(qr_key, False)
 
                     with btn_col3:
@@ -201,6 +259,7 @@ def render() -> None:
                                 download_label="Download CSV",
                                 file_name=f"attendance_{course_code}_{name}.csv",
                                 export=lambda: api_client.export_session_csv(token, session_id),
+                                on_request=keep_open,
                             )
                         with json_col:
                             render_json_download(
@@ -210,6 +269,7 @@ def render() -> None:
                                 download_label="Download JSON",
                                 file_name=f"attendance_{course_code}_{name}.json",
                                 export=lambda: api_client.export_session_json(token, session_id),
+                                on_request=keep_open,
                             )
 
                     with btn_col4:
@@ -255,6 +315,12 @@ def render() -> None:
                                 expires_at = current_qr.get("expires_at", "")[:19].replace("T", " ")
                                 ttl = current_qr.get("ttl_seconds", 180)
 
+                                if _qr_expired(current_qr.get("expires_at")):
+                                    st.warning(
+                                        "This QR code has expired and students can no longer use it. "
+                                        "Generate a new one, or disable QR codes for this session."
+                                    )
+
                                 st.image(
                                     _build_qr_image(qr_secret),
                                     caption="Scan using the SAIV Student App",
@@ -275,6 +341,7 @@ def render() -> None:
                         if st.button(
                             "🔄 Refresh check-ins" if has_checkins else "📋 Load check-ins",
                             key=f"load_checkins_{session_id}",
+                            on_click=keep_open,
                         ):
                             st.session_state.pop(checkins_state_key, None)
                             with st.spinner("Loading session check-ins..."):
@@ -352,24 +419,23 @@ def render() -> None:
             st.warning("No courses available. Please create courses in the Courses section first.")
             return
 
-        with st.form("create_session_form"):
-            c_sel1, c_sel2 = st.columns([2, 1])
-            with c_sel1:
-                course_select_options = {
-                    f"{c.get('code')} - {c.get('name')}": c for c in courses_data.get("items", [])
-                }
-                selected_course_obj = st.selectbox(
-                    "Course *",
-                    options=list(course_select_options.keys()),
-                )
-                selected_course = course_select_options[selected_course_obj]
+        # Outside the form so that choosing a course fills in its defaults below.
+        # Inside, the change would only arrive on submit and replace what was typed.
+        course_select_options = {
+            f"{c.get('code')} - {c.get('name')}": c for c in courses_data.get("items", [])
+        }
+        selected_course_obj = st.selectbox(
+            "Course *",
+            options=list(course_select_options.keys()),
+        )
+        selected_course = course_select_options[selected_course_obj]
 
-            with c_sel2:
-                session_type = st.selectbox(
-                    "Session Type *",
-                    options=["lecture", "tutorial", "lab", "exam"],
-                    index=0,
-                )
+        with st.form("create_session_form"):
+            session_type = st.selectbox(
+                "Session Type *",
+                options=["lecture", "tutorial", "lab", "exam"],
+                index=0,
+            )
 
             session_name = st.text_input(
                 "Session Title *",
@@ -379,20 +445,24 @@ def render() -> None:
             session_desc = st.text_area("Description (Optional)", placeholder="Overview of lecture topics...")
 
             st.markdown("#### Schedule & Timing")
-            st.caption("Times are in Singapore time (SGT, UTC+8).")
+            st.caption(
+                "Times are in Singapore time (SGT, UTC+8). The session starts and closes "
+                "automatically at these times."
+            )
             col_d1, col_d2 = st.columns(2)
-            now_singapore = datetime.now(SINGAPORE_TIMEZONE)
-            today = now_singapore.date()
-            now_time = (now_singapore + timedelta(minutes=5)).time()
-            end_time = (now_singapore + timedelta(hours=2)).time()
+            schedule_defaults = _schedule_defaults()
 
             with col_d1:
-                date_val = st.date_input("Date *", value=today)
-                start_t = st.time_input("Scheduled Start (SGT) *", value=now_time)
+                date_val = st.date_input("Date *", value=schedule_defaults["date"])
+                start_t = st.time_input(
+                    "Scheduled Start (SGT) *", value=schedule_defaults["start"], step=60
+                )
             with col_d2:
                 st.write("")
                 st.write("")
-                end_t = st.time_input("Scheduled End (SGT) *", value=end_time)
+                end_t = st.time_input(
+                    "Scheduled End (SGT) *", value=schedule_defaults["end"], step=60
+                )
 
             st.markdown("#### Geolocation & Security Constraints")
             col_g1, col_g2, col_g3 = st.columns(3)
@@ -468,6 +538,7 @@ def render() -> None:
                 ok_create, create_res = api_client.create_session(token, payload)
 
             if ok_create:
+                st.session_state.pop(SCHEDULE_DEFAULTS_KEY, None)
                 set_flash_message(f"Session '{session_name}' created successfully!")
                 st.rerun()
             else:

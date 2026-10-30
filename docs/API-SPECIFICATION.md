@@ -492,6 +492,8 @@ Update a session. **Requires auth (instructor only, must be session owner).**
 - `active` → `closed`: Closes check-in, finalizes attendance
 - Any status → `cancelled`: Cancels session
 
+These transitions also happen automatically: a `scheduled` session goes `active` at `scheduled_start`, and it closes once both `scheduled_end` and `checkin_closes_at` have passed. An instructor can still start or close a session early with this endpoint. Closed and cancelled sessions are never changed automatically.
+
 #### DELETE /sessions/{session_id}
 Delete a session. **Requires auth (instructor only, must be session owner).**
 

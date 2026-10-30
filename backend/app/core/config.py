@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     # Graded: reject check-ins from public IPs or GPS fixes outside Singapore.
     SINGAPORE_ONLY_CHECKINS: bool = True
 
+    # -- Session lifecycle ---------------------------------------------------
+    # Background sweep that starts and closes sessions on their schedule.
+    SESSION_LIFECYCLE_ENABLED: bool = True
+    SESSION_LIFECYCLE_INTERVAL_SECONDS: int = 15
+
     # -- Data retention ------------------------------------------------------
     DATA_RETENTION_DAYS: int = 30
     # Background sweep that scrubs records past scheduled_deletion_at.

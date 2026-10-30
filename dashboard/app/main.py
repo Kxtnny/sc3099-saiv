@@ -20,6 +20,8 @@ from app.auth import (
     is_authenticated,
     render_login_page,
     render_sidebar_user_profile,
+    restore_login,
+    sync_login_cookie,
 )
 from app.views import (
     audit,
@@ -63,10 +65,30 @@ st.markdown(
 )
 
 
+# Page names for the URL, so a browser reload stays on the same page.
+PAGE_SLUGS = {
+    "📊 Overview": "overview",
+    "📅 Sessions": "sessions",
+    "🚨 Review Queue": "review-queue",
+    "📋 Check-in Explorer": "checkins",
+    "🎓 Courses & Rosters": "courses",
+    "📜 Security Audit": "audit",
+    "📈 Observability": "observability",
+}
+
+
+def _page_slug(nav_option: str) -> str:
+    """URL name for a menu entry, ignoring any "(3)" count on its label."""
+    return PAGE_SLUGS.get(nav_option.split(" (")[0], "overview")
+
+
 def main() -> None:
     # -------------------------------------------------------------------------
     # Authentication Gate
     # -------------------------------------------------------------------------
+    restore_login()
+    sync_login_cookie()
+
     if not is_authenticated():
         render_login_page()
         return
@@ -115,11 +137,21 @@ def main() -> None:
             nav_options.append("📜 Security Audit")
         nav_options.append("📈 Observability")
 
+        requested_page = st.query_params.get("page")
         selected_page = st.radio(
             "Navigation",
             options=nav_options,
+            index=next(
+                (
+                    i
+                    for i, option in enumerate(nav_options)
+                    if _page_slug(option) == requested_page
+                ),
+                0,
+            ),
             label_visibility="collapsed",
         )
+        st.query_params["page"] = _page_slug(selected_page)
 
         # User profile & logout button at bottom of sidebar
         render_sidebar_user_profile()
