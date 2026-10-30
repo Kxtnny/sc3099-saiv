@@ -395,6 +395,37 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
+    def get_approved_flagged_checkins(
+        self,
+        token: str,
+        course_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        include_acknowledged: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[bool, Any]:
+        """Auto-approved check-ins in the MEDIUM risk band or above."""
+        url = f"{self.base_url}/checkins/approved-flagged"
+        params: Dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "include_acknowledged": include_acknowledged,
+        }
+        if course_id:
+            params["course_id"] = course_id
+        if session_id:
+            params["session_id"] = session_id
+        try:
+            res = self.session.get(
+                url,
+                headers=self._headers(token),
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
     def get_session_checkins(self, token: str, session_id: str) -> Tuple[bool, Any]:
         """Fetch all check-ins for a specific session."""
         url = f"{self.base_url}/checkins/session/{session_id}"
@@ -424,7 +455,11 @@ class APIClient:
         status: str,
         review_notes: Optional[str] = None,
     ) -> Tuple[bool, Any]:
-        """Instructor decision on a flagged/appealed check-in (approved or rejected)."""
+        """
+        Instructor decision on a flagged/appealed check-in (approved or rejected).
+
+        Approving an approved-with-flag check-in acknowledges it.
+        """
         url = f"{self.base_url}/checkins/{checkin_id}/review"
         payload = {"status": status}
         if review_notes:

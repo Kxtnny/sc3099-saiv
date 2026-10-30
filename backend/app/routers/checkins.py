@@ -70,7 +70,12 @@ from app.services.geo import (
     travel_speed_kmh,
 )
 from app.services.network import ip_outside_singapore
-from app.services.risk import RiskAssessment
+from app.services.risk import (
+    MEDIUM_RISK_FLOOR,
+    RiskAssessment,
+    is_approved_with_flag,
+    risk_level_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +130,10 @@ def _parse_factors(raw: Optional[str]) -> List[Dict[str, Any]]:
 def _to_response(checkin: CheckIn) -> CheckInResponse:
     payload = CheckInResponse.model_validate(checkin)
     payload.risk_factors = _parse_factors(checkin.risk_factors)
+    payload.risk_level = risk_level_for(checkin.risk_score).value
+    payload.approved_with_flag = is_approved_with_flag(
+        checkin.status, checkin.risk_score
+    )
     if checkin.device is not None:
         payload.device_trusted = checkin.device.is_trusted
     return payload
@@ -147,11 +156,15 @@ def _to_list_item(checkin: CheckIn) -> CheckInListItem:
         checked_in_at=checkin.checked_in_at,
         distance_from_venue_meters=checkin.distance_from_venue_meters,
         risk_score=checkin.risk_score,
+        risk_level=risk_level_for(checkin.risk_score).value,
         risk_factors=_parse_factors(checkin.risk_factors),
+        approved_with_flag=is_approved_with_flag(checkin.status, checkin.risk_score),
         liveness_passed=checkin.liveness_passed,
         device_trusted=checkin.device.is_trusted if checkin.device else None,
         appeal_reason=checkin.appeal_reason,
         appealed_at=checkin.appealed_at,
+        reviewed_at=checkin.reviewed_at,
+        review_notes=checkin.review_notes,
     )
 
 
@@ -747,6 +760,55 @@ def flagged_checkins(
     return paginate([_to_list_item(r) for r in rows], total, limit, offset)
 
 
+@router.get("/approved-flagged", response_model=PaginatedResponse[CheckInListItem])
+def approved_flagged_checkins(
+    course_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    include_acknowledged: bool = False,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    _staff: User = Depends(require_staff),
+    db: Session = Depends(get_db),
+):
+    """
+    Approved with flag: auto-approved check-ins in the MEDIUM band or above.
+
+    They need no decision, but an instructor should see them. Acknowledging
+    one is a review that keeps it approved, so it carries reviewed_at and
+    drops out of this list unless include_acknowledged is set.
+    """
+    query = (
+        db.query(CheckIn)
+        .options(
+            joinedload(CheckIn.student),
+            joinedload(CheckIn.session).joinedload(AttendanceSession.course),
+            joinedload(CheckIn.device),
+        )
+        .filter(
+            CheckIn.status == CheckInStatus.APPROVED.value,
+            CheckIn.risk_score >= MEDIUM_RISK_FLOOR,
+        )
+    )
+
+    if not include_acknowledged:
+        query = query.filter(CheckIn.reviewed_at.is_(None))
+    if session_id:
+        query = query.filter(CheckIn.session_id == session_id)
+    if course_id:
+        query = query.join(
+            AttendanceSession, AttendanceSession.id == CheckIn.session_id
+        ).filter(AttendanceSession.course_id == course_id)
+
+    total = query.count()
+    rows = (
+        query.order_by(CheckIn.risk_score.desc(), CheckIn.checked_in_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return paginate([_to_list_item(r) for r in rows], total, limit, offset)
+
+
 @router.get("/session/{session_id}", response_model=List[CheckInListItem])
 def session_checkins(
     session_id: str,
@@ -927,7 +989,12 @@ def review_checkin(
     reviewer: User = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
-    """Approve or reject a flagged or appealed check-in. Course staff only."""
+    """
+    Approve or reject a flagged or appealed check-in. Course staff only.
+
+    Approving a check-in that is already approved acknowledges an
+    approved-with-flag one: it stays approved and records the reviewer.
+    """
     checkin = (
         db.query(CheckIn)
         .options(joinedload(CheckIn.session))
@@ -948,6 +1015,10 @@ def review_checkin(
             detail="A review must resolve to approved or rejected",
         )
 
+    acknowledged = (
+        checkin.status == CheckInStatus.APPROVED.value
+        and payload.status == CheckInStatus.APPROVED
+    )
     checkin.status = payload.status.value
     checkin.reviewed_by_id = reviewer.id
     checkin.reviewed_at = utcnow()
@@ -956,7 +1027,7 @@ def review_checkin(
         if payload.review_notes
         else None
     )
-    if payload.status == CheckInStatus.APPROVED:
+    if payload.status == CheckInStatus.APPROVED and not acknowledged:
         checkin.verified_at = utcnow()
 
     log_action(
@@ -966,7 +1037,9 @@ def review_checkin(
         resource_type="checkin",
         resource_id=checkin.id,
         request=request,
-        details={"decision": payload.status.value},
+        details={
+            "decision": "acknowledged" if acknowledged else payload.status.value
+        },
     )
     db.commit()
     db.refresh(checkin)

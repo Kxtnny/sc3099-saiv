@@ -9,6 +9,18 @@ import streamlit as st
 from app.api_client import api_client
 from app.auth import get_token
 
+# Matches MEDIUM_RISK_FLOOR in backend/app/services/risk.py.
+APPROVED_WITH_FLAG_MIN_RISK = 0.3
+APPROVED_WITH_FLAG_OPTION = "approved with flag ⚑"
+
+
+def _status_label(checkin: Dict[str, Any]) -> str:
+    """Status in capitals, marked when it was approved with a risk flag."""
+    label = checkin.get("status", "").upper()
+    if checkin.get("approved_with_flag"):
+        label += " ⚑" if not checkin.get("reviewed_at") else " ⚑ (ACK)"
+    return label
+
 
 def render() -> None:
     """Render Check-in Explorer view."""
@@ -38,11 +50,25 @@ def render() -> None:
         with col_f2:
             status_filter = st.selectbox(
                 "Verification Status",
-                options=["All", "approved", "flagged", "rejected", "appealed", "pending"],
+                options=[
+                    "All",
+                    "approved",
+                    APPROVED_WITH_FLAG_OPTION,
+                    "flagged",
+                    "rejected",
+                    "appealed",
+                    "pending",
+                ],
                 index=0,
                 key="ci_status",
+                help="'Approved with flag' = auto-approved with risk score ≥ 0.30 (MEDIUM band or above).",
             )
-            status_param = None if status_filter == "All" else status_filter
+            if status_filter == "All":
+                status_param = None
+            elif status_filter == APPROVED_WITH_FLAG_OPTION:
+                status_param = "approved"
+            else:
+                status_param = status_filter
 
         with col_f3:
             page_limit = st.selectbox("Records per Page", options=[25, 50, 100], index=1)
@@ -60,6 +86,10 @@ def render() -> None:
         with col_r2:
             student_search = st.text_input("Filter by Student ID (Optional)", placeholder="UUID of student")
 
+    min_risk = risk_range[0]
+    if status_filter == APPROVED_WITH_FLAG_OPTION:
+        min_risk = max(min_risk, APPROVED_WITH_FLAG_MIN_RISK)
+
     # Fetch check-ins
     with st.spinner("Fetching attendance records..."):
         ok, res = api_client.list_checkins(
@@ -67,7 +97,7 @@ def render() -> None:
             course_id=course_filter,
             student_id=student_search.strip() if student_search else None,
             status=status_param,
-            min_risk=risk_range[0],
+            min_risk=min_risk,
             max_risk=risk_range[1],
             limit=page_limit,
             offset=0,
@@ -96,8 +126,9 @@ def render() -> None:
                 "Email": c.get("student_email", "N/A"),
                 "Course": c.get("course_code", "N/A"),
                 "Session": c.get("session_name", "N/A"),
-                "Status": c.get("status", "").upper(),
+                "Status": _status_label(c),
                 "Risk": f"{c.get('risk_score', 0.0):.2f}",
+                "Level": c.get("risk_level") or "N/A",
                 "Distance": f"{c.get('distance_from_venue_meters', 0.0):.1f}m"
                 if c.get("distance_from_venue_meters") is not None
                 else "N/A",
@@ -114,7 +145,7 @@ def render() -> None:
     selected_idx = st.selectbox(
         "Select a record to inspect verification signals:",
         options=range(len(items)),
-        format_func=lambda i: f"#{items[i].get('id', '')[:8]} - {items[i].get('student_name') or items[i].get('student_email')} - {items[i].get('status', '').upper()}",
+        format_func=lambda i: f"#{items[i].get('id', '')[:8]} - {items[i].get('student_name') or items[i].get('student_email')} - {_status_label(items[i])}",
     )
 
     if items:
@@ -133,8 +164,10 @@ def render() -> None:
                 st.markdown(f"**Student ID:** `{detail_data.get('student_id')}`")
                 st.markdown(f"**Session ID:** `{detail_data.get('session_id')}`")
             with d2:
-                st.markdown(f"**Status:** `{detail_data.get('status', '').upper()}`")
-                st.markdown(f"**Risk Score:** `{detail_data.get('risk_score', 0.0):.4f}`")
+                st.markdown(f"**Status:** `{_status_label(detail_data)}`")
+                risk_level = detail_data.get("risk_level")
+                level_text = f" ({risk_level})" if risk_level else ""
+                st.markdown(f"**Risk Score:** `{detail_data.get('risk_score', 0.0):.4f}`{level_text}")
                 st.markdown(f"**Timestamp:** `{detail_data.get('checked_in_at')}`")
             with d3:
                 dist = detail_data.get("distance_from_venue_meters")

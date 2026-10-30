@@ -94,6 +94,7 @@ class CheckInResponse(BaseModel):
     risk_score: float
     risk_level: Optional[str] = None
     risk_factors: List[Dict[str, Any]] = []
+    approved_with_flag: bool = False
 
     device_trusted: Optional[bool] = None
     appeal_reason: Optional[str] = None
@@ -122,11 +123,15 @@ class CheckInListItem(BaseModel):
     checked_in_at: UTCDateTime
     distance_from_venue_meters: Optional[float] = None
     risk_score: float
+    risk_level: Optional[str] = None
     risk_factors: List[Dict[str, Any]] = []
+    approved_with_flag: bool = False
     liveness_passed: Optional[bool] = None
     device_trusted: Optional[bool] = None
     appeal_reason: Optional[str] = None
     appealed_at: Optional[UTCDateTime] = None
+    reviewed_at: Optional[UTCDateTime] = None
+    review_notes: Optional[str] = None
 
     @field_validator("risk_factors", mode="before")
     @classmethod

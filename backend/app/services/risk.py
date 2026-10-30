@@ -57,6 +57,27 @@ SIGNAL_SEVERITY: Dict[SignalType, SignalSeverity] = {
     SignalType.FACE_MATCH_LOW_CONFIDENCE: SignalSeverity.MEDIUM,
 }
 
+# Lower edge of the MEDIUM band. An approved check-in scoring at or above it
+# went through automatically but carried risk signals, so instructors see it
+# as "approved with flag" until they acknowledge it.
+MEDIUM_RISK_FLOOR = 0.3
+
+
+def risk_level_for(score: float) -> RiskLevel:
+    """Bucket a risk score per SECURITY-REQUIREMENTS.md."""
+    if score < MEDIUM_RISK_FLOOR:
+        return RiskLevel.LOW
+    if score < 0.5:
+        return RiskLevel.MEDIUM
+    if score < 0.7:
+        return RiskLevel.HIGH
+    return RiskLevel.CRITICAL
+
+
+def is_approved_with_flag(status: str, score: float) -> bool:
+    """Auto-approved, but with enough risk that an instructor should look."""
+    return status == CheckInStatus.APPROVED.value and score >= MEDIUM_RISK_FLOOR
+
 
 @dataclass
 class RiskAssessment:
@@ -103,13 +124,7 @@ class RiskAssessment:
     @property
     def level(self) -> RiskLevel:
         """Bucket the score per SECURITY-REQUIREMENTS.md."""
-        if self.score < 0.3:
-            return RiskLevel.LOW
-        if self.score < 0.5:
-            return RiskLevel.MEDIUM
-        if self.score < 0.7:
-            return RiskLevel.HIGH
-        return RiskLevel.CRITICAL
+        return risk_level_for(self.score)
 
     def decide(self, threshold: float) -> CheckInStatus:
         """
