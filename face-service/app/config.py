@@ -21,7 +21,7 @@ class Config:
     # Liveness weights sum to 1.00. Depth and mesh are down-weighted because 
     # photos can fool MediaPipe's 3D estimation. Specular, frequency, and gamut 
     # are the real anti-spoofs.
-    LIVENESS_THRESHOLD = 0.60
+    LIVENESS_THRESHOLD = 0.80
     LIVENESS_DEPTH_WEIGHT = 0.15
     LIVENESS_MESH_WEIGHT = 0.10
     LIVENESS_TEXTURE_WEIGHT = 0.20
