@@ -39,6 +39,17 @@ def _load_pages(
     return True, items, None
 
 
+def _course_instructor_options(
+    course: Dict[str, Any], instructor_options: Dict[str, Any]
+) -> Dict[str, Optional[str]]:
+    """Instructor choices for a course, keeping a current one no longer listed."""
+    options: Dict[str, Optional[str]] = {"Unassigned": None, **instructor_options}
+    current_id = course.get("instructor_id")
+    if current_id and current_id not in instructor_options.values():
+        options[f"{course.get('instructor_name') or current_id} (current)"] = current_id
+    return options
+
+
 def render() -> None:
     """Render admin-only user and course management tools."""
     user = get_current_user()
@@ -200,6 +211,19 @@ def render() -> None:
                     st.error(f"Could not create user account: {result}")
 
     with course_tab:
+        instructors = (
+            [
+                item
+                for item in users
+                if item.get("role") == "instructor" and item.get("is_active")
+            ]
+            if users_ok
+            else []
+        )
+        instructor_options = {
+            f"{item.get('full_name') or item.get('email')} ({item.get('email')})": item.get("id")
+            for item in instructors
+        }
         st.subheader("Course catalog")
         if not courses_ok:
             st.error(f"Could not load courses: {courses_error}")
@@ -234,6 +258,10 @@ def render() -> None:
                         key="admin_course_to_update",
                     )
                     selected_course = course_options[selected_course_label]
+                    current_instructor_id = selected_course.get("instructor_id")
+                    course_instructors = _course_instructor_options(
+                        selected_course, instructor_options
+                    )
                     with st.form("admin_course_update"):
                         updated_name = st.text_input(
                             "Course name",
@@ -247,19 +275,40 @@ def render() -> None:
                             "Course active",
                             value=bool(selected_course.get("is_active")),
                         )
+                        if users_ok:
+                            updated_instructor = st.selectbox(
+                                "Instructor",
+                                list(course_instructors),
+                                index=list(course_instructors.values()).index(
+                                    current_instructor_id
+                                ),
+                                key=f"admin_course_instructor_{selected_course['id']}",
+                                help="The instructor manages this course's sessions, including existing ones.",
+                            )
+                        else:
+                            st.caption(
+                                "The instructor cannot be changed because users could not be loaded."
+                            )
                         save_course = st.form_submit_button("Save course")
                     if save_course:
                         if not updated_name.strip() or not updated_semester.strip():
                             st.error("Course name and semester are required.")
                         else:
+                            changes = {
+                                "name": updated_name.strip(),
+                                "semester": updated_semester.strip(),
+                                "is_active": active_course,
+                            }
+                            if (
+                                users_ok
+                                and course_instructors[updated_instructor]
+                                != current_instructor_id
+                            ):
+                                changes["instructor_id"] = course_instructors[
+                                    updated_instructor
+                                ]
                             ok_update, result = api_client.update_course(
-                                token,
-                                selected_course["id"],
-                                {
-                                    "name": updated_name.strip(),
-                                    "semester": updated_semester.strip(),
-                                    "is_active": active_course,
-                                },
+                                token, selected_course["id"], changes
                             )
                             if ok_update:
                                 st.success("Course updated.")
@@ -288,19 +337,6 @@ def render() -> None:
                 st.info("No course records were returned.")
 
         st.subheader("Create course")
-        instructors = (
-            [
-                item
-                for item in users
-                if item.get("role") == "instructor" and item.get("is_active")
-            ]
-            if users_ok
-            else []
-        )
-        instructor_options = {
-            f"{item.get('full_name') or item.get('email')} ({item.get('email')})": item.get("id")
-            for item in instructors
-        }
         with st.form("admin_course_create"):
             code = st.text_input("Course code")
             name = st.text_input("Course name")
