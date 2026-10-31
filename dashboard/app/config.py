@@ -18,6 +18,11 @@ API_BASE_URL = f"{BACKEND_URL.rstrip('/')}{API_V1_PREFIX}"
 DEFAULT_TIMEOUT = 10.0
 EXPORT_TIMEOUT = 30.0
 
-# Allowed dashboard roles
-STAFF_ROLES = ["instructor", "admin", "ta"]
+# Roles allowed to use the dashboard.
+STAFF_ROLES = ["student", "ta", "instructor", "admin"]
 
+# Existing Next.js check-in and device-registration portal.
+STUDENT_PORTAL_URL = os.getenv("STUDENT_PORTAL_URL", "http://localhost:3000")
+
+# Keep in sync with dashboard/prometheus-alert-rules.yml.
+HIGH_FLAGGED_SHARE_THRESHOLD = 0.30

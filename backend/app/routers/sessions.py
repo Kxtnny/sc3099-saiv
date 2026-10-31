@@ -1,11 +1,9 @@
 """
 Session management.
 
-Sessions are the check-in windows students attend. Any instructor or admin may
-create one for any course - courses are seeded centrally and frequently have no
-instructor assigned, so requiring ownership at creation would make sessions
-impossible to schedule. Editing and deleting *are* ownership-checked, so one
-instructor cannot alter another's session.
+Sessions are the check-in windows students attend. Instructors may create,
+edit, and delete sessions only in courses they own; administrators may manage
+sessions system-wide.
 """
 
 import logging
@@ -14,7 +12,7 @@ from datetime import timedelta
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func
+from sqlalchemy import false, func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
@@ -37,6 +35,11 @@ from app.enums import (
 from app.models import AttendanceSession, CheckIn, Course, Enrollment, User
 from app.schemas.common import PaginatedResponse
 from app.schemas.session import SessionCreate, SessionResponse, SessionUpdate
+from app.services.authorization import (
+    accessible_course_ids,
+    require_course_access,
+    require_session_access,
+)
 from app.services.audit import log_action
 
 logger = logging.getLogger(__name__)
@@ -113,10 +116,8 @@ def _serialize_with_counts(
 
 
 def _owns(user: User, session: AttendanceSession) -> bool:
-    """Admins, the session creator, and the course instructor may edit."""
+    """Admins and the course's currently assigned instructor may edit."""
     if user.role == UserRole.ADMIN.value:
-        return True
-    if session.instructor_id == user.id:
         return True
     return session.course is not None and session.course.instructor_id == user.id
 
@@ -138,12 +139,21 @@ def list_sessions(
         joinedload(AttendanceSession.course)
     )
 
+    if course_id:
+        require_course_access(db, _staff, course_id)
+        query = query.filter(AttendanceSession.course_id == course_id)
+    elif _staff.role != UserRole.ADMIN.value:
+        course_ids = accessible_course_ids(db, _staff)
+        query = query.filter(AttendanceSession.course_id.in_(course_ids))
     if status_filter is not None:
         query = query.filter(AttendanceSession.status == status_filter.value)
-    if course_id:
-        query = query.filter(AttendanceSession.course_id == course_id)
     if instructor_id:
-        query = query.filter(AttendanceSession.instructor_id == instructor_id)
+        if _staff.role == UserRole.ADMIN.value:
+            query = query.filter(AttendanceSession.instructor_id == instructor_id)
+        elif instructor_id == _staff.id:
+            query = query.filter(AttendanceSession.instructor_id == _staff.id)
+        else:
+            query = query.filter(false())
     if start_date:
         query = query.filter(AttendanceSession.scheduled_start >= start_date)
     if end_date:
@@ -202,12 +212,19 @@ def my_sessions(
             Enrollment.student_id == current_user.id,
             Enrollment.is_active.is_(True),
         )
+    elif current_user.role in (
+        UserRole.INSTRUCTOR.value,
+        UserRole.TA.value,
+    ):
+        query = query.filter(
+            AttendanceSession.course_id.in_(
+                accessible_course_ids(db, current_user)
+            )
+        )
     elif current_user.role != UserRole.ADMIN.value:
-        query = query.outerjoin(
-            Course, Course.id == AttendanceSession.course_id
-        ).filter(
-            (AttendanceSession.instructor_id == current_user.id)
-            | (Course.instructor_id == current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
         )
 
     if status_filter is not None:
@@ -239,6 +256,9 @@ def get_session(
             status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
         )
 
+    if current_user.role == UserRole.STUDENT.value:
+        return _serialize(session)
+    require_session_access(db, current_user, session)
     return _serialize_with_counts(db, [session])[0]
 
 
@@ -261,6 +281,7 @@ def create_session(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Course not found"
         )
+    require_course_access(db, instructor, course.id)
 
     start = to_naive_utc(payload.scheduled_start)
     end = to_naive_utc(payload.scheduled_end)

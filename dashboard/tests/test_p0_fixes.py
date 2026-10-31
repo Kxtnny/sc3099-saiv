@@ -14,14 +14,20 @@ from app.auth import (
     can_manage_session,
     can_view_audit,
 )
+from app import auth
 from app.views import _downloads
+from app.views.administration import _load_pages
+from app.views import audit, checkins
 from app.views import observability
 from app.views import overview
 from app.views._time import format_singapore_time
 from app.views.review_queue import _factor_score
 from app.views.sessions import (
     _build_qr_image,
+    _parse_singapore_datetime,
     _scheduled_time_utc,
+    _utc_date_bound as _session_utc_date_bound,
+    _utc_iso,
 )
 
 
@@ -42,10 +48,18 @@ def test_scheduled_time_is_interpreted_as_singapore_time():
     assert converted == datetime(2026, 10, 16, 1, 30, tzinfo=timezone.utc)
 
 
+def test_session_timestamp_helpers_round_trip_singapore_and_utc():
+    parsed = _parse_singapore_datetime("2026-10-16T01:30:00Z")
+
+    assert parsed.isoformat() == "2026-10-16T09:30:00+08:00"
+    assert _utc_iso(parsed) == "2026-10-16T01:30:00Z"
+
+
 def test_csv_export_is_requested_once_and_cached(monkeypatch):
     state = {}
     button_results = iter([True, False])
-    export = Mock(return_value=(True, b"csv-data"))
+    csv_bytes = 'id,name\r\n1,"Anaïs, PhD"\r\n'.encode("utf-8")
+    export = Mock(return_value=(True, csv_bytes))
     download_button = Mock()
 
     monkeypatch.setattr(st, "session_state", state)
@@ -65,7 +79,8 @@ def test_csv_export_is_requested_once_and_cached(monkeypatch):
 
     export.assert_called_once_with()
     assert download_button.call_count == 2
-    assert download_button.call_args.kwargs["data"] == b"csv-data"
+    assert download_button.call_args.kwargs["data"] == csv_bytes
+    assert b"Ana\xc3\xafs" in download_button.call_args.kwargs["data"]
 
 
 def test_csv_export_failure_is_reported_without_caching(monkeypatch):
@@ -131,17 +146,175 @@ def test_json_exports_use_existing_authenticated_backend_routes():
     client.session.get = Mock(return_value=response)
 
     calls = (
-        (client.export_session_json, ("session-1",), "/export/session/session-1?format=json"),
-        (client.export_course_json, ("course-1",), "/export/attendance/course-1?format=json"),
-        (client.export_audit_json, (), "/audit/export?format=json"),
+        (
+            client.export_session_json,
+            ("session-1",),
+            "/export/session/session-1?format=json",
+            None,
+        ),
+        (
+            client.export_course_json,
+            ("course-1",),
+            "/export/attendance/course-1",
+            {"format": "json"},
+        ),
+        (client.export_audit_json, (), "/audit/export?format=json", None),
     )
-    for method, args, expected_path in calls:
+    for method, args, expected_path, expected_params in calls:
         assert method("access-token", *args) == (True, {"records": []})
         request = client.session.get.call_args
         assert request.args[0] == f"https://api.example.test/api/v1{expected_path}"
         assert request.kwargs["headers"] == client._headers("access-token")
+        if expected_params is not None:
+            assert request.kwargs["params"] == expected_params
 
     assert client.session.get.call_count == 3
+
+
+def test_course_export_passes_date_range_as_api_query_params():
+    client = APIClient("https://api.example.test/api/v1")
+    response = Mock(ok=True, content=b"csv")
+    client.session.get = Mock(return_value=response)
+
+    assert client.export_course_csv(
+        "access-token",
+        "course-1",
+        start_date="2026-01-01T00:00:00Z",
+        end_date="2026-01-31T23:59:59Z",
+    ) == (True, b"csv")
+    request = client.session.get.call_args
+    assert request.args[0] == (
+        "https://api.example.test/api/v1/export/attendance/course-1"
+    )
+    assert request.kwargs["params"] == {
+        "format": "csv",
+        "start_date": "2026-01-01T00:00:00Z",
+        "end_date": "2026-01-31T23:59:59Z",
+    }
+
+
+def test_admin_api_client_uses_authorized_user_and_course_endpoints():
+    client = APIClient("https://api.example.test/api/v1")
+    response = Mock(
+        ok=True,
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json=Mock(return_value={"id": "resource-1"}),
+    )
+    client.session.get = Mock(return_value=response)
+    client.session.post = Mock(return_value=response)
+    client.session.patch = Mock(return_value=response)
+    client.session.delete = Mock(
+        return_value=Mock(ok=True, status_code=204, headers={})
+    )
+
+    client.get_course_stats(
+        "access-token",
+        "course-1",
+        start_date="2026-01-01T00:00:00Z",
+        end_date="2026-01-31T23:59:59Z",
+    )
+    assert client.session.get.call_args.kwargs["params"] == {
+        "start_date": "2026-01-01T00:00:00Z",
+        "end_date": "2026-01-31T23:59:59Z",
+    }
+
+    client.create_users("access-token", [{"email": "ta@example.test"}])
+    assert client.session.post.call_args.args[0].endswith("/admin/users/bulk")
+    assert client.session.post.call_args.kwargs["json"] == {
+        "users": [{"email": "ta@example.test"}]
+    }
+    client.create_course("access-token", {"code": "CS1000"})
+    assert client.session.post.call_args.args[0].endswith("/courses/")
+    client.update_course("access-token", "course-1", {"is_active": False})
+    assert client.session.patch.call_args.args[0].endswith("/courses/course-1")
+    client.update_user("access-token", "user-1", {"role": "ta"})
+    assert client.session.patch.call_args.args[0].endswith("/users/user-1")
+    assert client.delete_course("access-token", "course-1") == (True, {})
+    assert client.session.delete.call_args.args[0].endswith("/courses/course-1")
+
+    client.update_device(
+        "access-token", "device-1", is_active=False, is_trusted=True
+    )
+    assert client.session.patch.call_args.args[0].endswith("/devices/device-1")
+    assert client.session.patch.call_args.kwargs["json"] == {
+        "is_active": False,
+        "is_trusted": True,
+    }
+    client.list_devices("access-token", is_trusted=True)
+    assert client.session.get.call_args.args[0].endswith("/devices/")
+    assert client.session.get.call_args.kwargs["params"]["is_trusted"] is True
+
+
+def test_admin_list_pagination_validates_progress_and_response_shape():
+    responses = iter(
+        [
+            (True, {"items": [{"id": "one"}, {"id": "two"}], "total": 3}),
+            (True, {"items": [{"id": "three"}], "total": 3}),
+        ]
+    )
+    offsets = []
+
+    def fetch(offset):
+        offsets.append(offset)
+        return next(responses)
+
+    assert _load_pages(fetch) == (
+        True,
+        [{"id": "one"}, {"id": "two"}, {"id": "three"}],
+        None,
+    )
+    assert offsets == [0, 2]
+
+    ok, items, error = _load_pages(
+        lambda _offset: (True, {"items": [], "total": 1})
+    )
+    assert not ok
+    assert items == []
+    assert error == "The API returned an invalid paginated response."
+
+
+def test_ta_assignment_client_uses_authenticated_course_routes():
+    client = APIClient("https://api.example.test/api/v1")
+    response = Mock(
+        ok=True,
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json=Mock(return_value={"items": [], "total": 0}),
+    )
+    client.session.get = Mock(return_value=response)
+    client.session.post = Mock(return_value=response)
+    client.session.delete = Mock(
+        return_value=Mock(ok=True, status_code=204, headers={})
+    )
+
+    assert client.list_users("access-token", role="ta") == (
+        True,
+        {"items": [], "total": 0},
+    )
+    assert client.get_course_tas("access-token", "course-1") == (
+        True,
+        {"items": [], "total": 0},
+    )
+    assert client.assign_course_ta("access-token", "course-1", "ta-1") == (
+        True,
+        {"items": [], "total": 0},
+    )
+    assert client.unassign_course_ta("access-token", "course-1", "ta-1") == (
+        True,
+        {},
+    )
+
+    list_request = client.session.get.call_args_list[0]
+    assert list_request.args[0] == "https://api.example.test/api/v1/users/"
+    assert list_request.kwargs["params"]["role"] == "ta"
+    assert list_request.kwargs["headers"] == client._headers("access-token")
+    course_ta_request = client.session.get.call_args_list[1]
+    assert course_ta_request.args[0].endswith("/courses/course-1/tas")
+    assert client.session.post.call_args.kwargs["json"] == {"ta_id": "ta-1"}
+    assert client.session.delete.call_args.args[0].endswith(
+        "/courses/course-1/tas/ta-1"
+    )
 
 
 def test_ta_session_controls_follow_backend_ownership_rules():
@@ -151,12 +324,70 @@ def test_ta_session_controls_follow_backend_ownership_rules():
     course = {"instructor_id": "instructor-id"}
 
     assert not can_create_sessions(ta)
-    assert can_manage_session(ta, own_session, course)
+    assert not can_manage_session(ta, own_session, course)
     assert not can_manage_session(ta, other_session, course)
     assert not can_view_audit(ta)
     assert can_create_sessions({"id": "instructor-id", "role": "instructor"})
     assert not can_view_audit({"id": "instructor-id", "role": "instructor"})
     assert can_view_audit({"id": "admin-id", "role": "admin"})
+
+
+def test_session_action_permissions_cover_all_four_roles():
+    instructor_session = {"instructor_id": "instructor-id"}
+    instructor_course = {"instructor_id": "instructor-id"}
+    other_session = {"instructor_id": "other-id"}
+
+    assert not can_create_sessions({"id": "student-id", "role": "student"})
+    assert not can_create_sessions({"id": "ta-id", "role": "ta"})
+    assert can_create_sessions({"id": "instructor-id", "role": "instructor"})
+    assert can_create_sessions({"id": "admin-id", "role": "admin"})
+
+    assert not can_manage_session(
+        {"id": "student-id", "role": "student"},
+        instructor_session,
+        instructor_course,
+    )
+    assert not can_manage_session(
+        {"id": "ta-id", "role": "ta"},
+        instructor_session,
+        instructor_course,
+    )
+    assert can_manage_session(
+        {"id": "instructor-id", "role": "instructor"},
+        instructor_session,
+        instructor_course,
+    )
+    assert not can_manage_session(
+        {"id": "instructor-id", "role": "instructor"},
+        other_session,
+        {"instructor_id": "other-id"},
+    )
+    assert can_manage_session(
+        {"id": "admin-id", "role": "admin"},
+        other_session,
+        {"instructor_id": "other-id"},
+    )
+
+
+def test_sidebar_escapes_untrusted_profile_html(monkeypatch):
+    profile = {
+        "full_name": '<img src=x onerror="alert(1)">',
+        "email": "user@example.test<script>alert(1)</script>",
+        "role": "student",
+    }
+    markdown = Mock()
+    monkeypatch.setattr(auth, "get_current_user", lambda: profile)
+    monkeypatch.setattr(st, "sidebar", nullcontext())
+    monkeypatch.setattr(st, "markdown", markdown)
+    monkeypatch.setattr(st, "button", Mock(return_value=False))
+
+    auth.render_sidebar_user_profile()
+
+    rendered_profile = markdown.call_args_list[1].args[0]
+    assert "&lt;img" in rendered_profile
+    assert "&lt;script&gt;" in rendered_profile
+    assert "<img src=" not in rendered_profile
+    assert "<script>" not in rendered_profile
 
 
 def test_overview_refresh_runs_every_thirty_seconds(monkeypatch):
@@ -409,4 +640,113 @@ def test_p95_query_aggregates_histogram_buckets_across_endpoints():
     assert observability.P95_LATENCY_QUERY == (
         "histogram_quantile(0.95, sum by (le) "
         "(rate(http_request_duration_seconds_bucket[5m]))) * 1000"
+    )
+
+
+def test_prometheus_missing_or_malformed_values_are_unavailable():
+    assert observability._extract_prom_value({"status": "success", "data": {"result": []}}) is None
+    assert observability._extract_prom_value(
+        {"status": "success", "data": {"result": [{"value": [1, "NaN"]}]}}
+    ) is None
+    assert observability._extract_prom_value(
+        {"status": "success", "data": {"result": [{"value": [1, "0"]}]}}
+    ) == 0
+    assert observability._extract_prom_series(
+        {
+            "status": "success",
+            "data": {
+                "result": [
+                    {"values": [[1792141200, "12.5"], [1792141500, "bad"]]}
+                ]
+            },
+        }
+    ) == [
+        {
+            "Time (UTC)": datetime.fromtimestamp(1792141200, timezone.utc),
+            "Value": 12.5,
+        }
+    ]
+
+
+def test_dashboard_api_client_passes_session_and_audit_filter_parameters():
+    client = APIClient("https://api.example.test/api/v1")
+    response = Mock(
+        ok=True,
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json=Mock(return_value={"items": [], "total": 0}),
+    )
+    client.session.get = Mock(return_value=response)
+
+    assert client.list_sessions(
+        "token",
+        course_id="course-1",
+        instructor_id="instructor-1",
+        start_date="2026-10-01T00:00:00Z",
+        end_date="2026-10-31T23:59:59Z",
+        limit=25,
+        offset=50,
+    ) == (True, {"items": [], "total": 0})
+    assert client.session.get.call_args.kwargs["params"] == {
+        "limit": 25,
+        "offset": 50,
+        "course_id": "course-1",
+        "instructor_id": "instructor-1",
+        "start_date": "2026-10-01T00:00:00Z",
+        "end_date": "2026-10-31T23:59:59Z",
+    }
+
+    assert client.list_audit_logs(
+        "token",
+        user_id="user-1",
+        action="login_failed",
+        resource_type="session",
+        resource_id="resource-1",
+        success=False,
+        start_date="2026-10-01T00:00:00Z",
+        end_date="2026-10-31T23:59:59Z",
+        limit=25,
+        offset=25,
+    ) == (True, {"items": [], "total": 0})
+    assert client.session.get.call_args.kwargs["params"] == {
+        "limit": 25,
+        "offset": 25,
+        "user_id": "user-1",
+        "action": "login_failed",
+        "resource_type": "session",
+        "resource_id": "resource-1",
+        "success": False,
+        "start_date": "2026-10-01T00:00:00Z",
+        "end_date": "2026-10-31T23:59:59Z",
+    }
+
+
+def test_prometheus_range_query_sends_time_range_and_step():
+    client = APIClient()
+    response = Mock(
+        ok=True,
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json=Mock(return_value={"status": "success", "data": {"result": []}}),
+    )
+    client.session.get = Mock(return_value=response)
+
+    assert client.query_prometheus_range(
+        "up", "2026-10-21T00:00:00Z", "2026-10-21T01:00:00Z", "60s"
+    ) == (True, {"status": "success", "data": {"result": []}})
+    assert client.session.get.call_args.args[0].endswith("/api/v1/query_range")
+    assert client.session.get.call_args.kwargs["params"] == {
+        "query": "up",
+        "start": "2026-10-21T00:00:00Z",
+        "end": "2026-10-21T01:00:00Z",
+        "step": "60s",
+    }
+
+
+def test_filter_date_helpers_include_the_full_selected_day():
+    expected = "2026-10-21T23:59:59.999999Z"
+    assert checkins._utc_date_bound(date(2026, 10, 21), end=True) == expected
+    assert audit._utc_date_bound(date(2026, 10, 21), end=True) == expected
+    assert _session_utc_date_bound(date(2026, 10, 21), end=True) == (
+        "2026-10-21T15:59:59.999999Z"
     )

@@ -31,14 +31,8 @@ def _render_sessions():
     sessions.render()
 
 
-@pytest.mark.parametrize(
-    "user",
-    [
-        {"id": "instructor-id", "role": "instructor"},
-        {"id": "ta-id", "role": "ta"},
-    ],
-)
-def test_sessions_page_renders_session_panels_without_errors(monkeypatch, user):
+def test_sessions_page_renders_session_panels_without_errors(monkeypatch):
+    user = {"id": "instructor-id", "role": "instructor"}
     monkeypatch.setattr(
         api_client, "list_courses", Mock(return_value=(True, {"items": [COURSE], "total": 1}))
     )

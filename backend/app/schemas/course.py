@@ -59,3 +59,19 @@ class CourseResponse(BaseModel):
     is_active: bool
     created_at: UTCDateTime
     updated_at: Optional[UTCDateTime] = None
+
+
+class CourseTAAssignmentCreate(BaseModel):
+    ta_id: str = Field(min_length=1, max_length=36)
+
+
+class CourseTAAssignmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    course_id: str
+    ta_id: str
+    assigned_by_id: Optional[str] = None
+    assigned_at: UTCDateTime
+    ta_email: Optional[str] = None
+    ta_name: Optional[str] = None

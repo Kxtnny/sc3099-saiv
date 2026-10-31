@@ -1,10 +1,8 @@
 """
 Enrollment management.
 
-Course staff (TA, instructor, admin) may manage any course roster. Ownership is
-deliberately not required: courses are created centrally by an admin and often
-have no instructor assigned, so an ownership check would lock the real teaching
-staff out of their own roster.
+Instructors may manage rosters for their assigned courses; administrators have
+system-wide access. TAs can review attendance but cannot manage enrollments.
 """
 
 import logging
@@ -19,7 +17,7 @@ from app.core.database import get_db
 from app.core.sanitize import escape_like
 from app.core.security import get_password_hash
 from app.core.utils import new_uuid, utcnow
-from app.dependencies import get_current_user, require_staff
+from app.dependencies import get_current_user, require_instructor, require_staff
 from app.enums import AuditAction, UserRole
 from app.models import Course, Enrollment, User
 from app.schemas.enrollment import (
@@ -31,6 +29,7 @@ from app.schemas.enrollment import (
     EnrollmentResponse,
     MyEnrollmentResponse,
 )
+from app.services.authorization import require_course_access
 from app.services.audit import log_action
 
 logger = logging.getLogger(__name__)
@@ -51,13 +50,17 @@ def create_enrollment_record(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
         )
+    if student.role != UserRole.STUDENT.value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Only student accounts can be enrolled",
+        )
 
     course = db.query(Course).filter(Course.id == course_id).first()
     if course is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Course not found"
         )
-
     existing = (
         db.query(Enrollment)
         .filter(
@@ -131,15 +134,16 @@ def course_enrollments(
     course_id: str,
     is_active: bool = True,
     search: Optional[str] = Query(default=None, max_length=255),
-    _staff: User = Depends(require_staff),
+    _staff: User = Depends(require_instructor),
     db: Session = Depends(get_db),
 ):
-    """Roster for a course. Course staff only."""
+    """Roster for a course. The assigned instructor or an admin only."""
     course = db.query(Course).filter(Course.id == course_id).first()
     if course is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Course not found"
         )
+    require_course_access(db, _staff, course_id)
 
     # joinedload avoids one query per student (N+1) when building the roster.
     query = (
@@ -184,10 +188,11 @@ def course_enrollments(
 def create_enrollment(
     payload: EnrollmentCreate,
     request: Request,
-    staff: User = Depends(require_staff),
+    staff: User = Depends(require_instructor),
     db: Session = Depends(get_db),
 ):
     """Enroll one student in a course."""
+    require_course_access(db, staff, payload.course_id)
     enrollment = create_enrollment_record(db, payload.student_id, payload.course_id)
     log_action(
         db,
@@ -207,7 +212,7 @@ def create_enrollment(
 def bulk_enroll(
     payload: EnrollmentBulkCreate,
     request: Request,
-    staff: User = Depends(require_staff),
+    staff: User = Depends(require_instructor),
     db: Session = Depends(get_db),
 ):
     """Enroll many students by email, optionally creating missing accounts."""
@@ -216,6 +221,7 @@ def bulk_enroll(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Course not found"
         )
+    require_course_access(db, staff, course.id)
 
     enrolled = already = not_found = created = 0
     details = []
@@ -242,6 +248,11 @@ def bulk_enroll(
             db.add(student)
             db.flush()
             created += 1
+        elif student.role != UserRole.STUDENT.value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Only student accounts can be enrolled",
+            )
 
         existing = (
             db.query(Enrollment)
@@ -289,7 +300,7 @@ def bulk_enroll(
 def delete_enrollment(
     enrollment_id: str,
     request: Request,
-    staff: User = Depends(require_staff),
+    staff: User = Depends(require_instructor),
     db: Session = Depends(get_db),
 ):
     """
@@ -302,6 +313,7 @@ def delete_enrollment(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Enrollment not found"
         )
+    require_course_access(db, staff, enrollment.course_id)
 
     enrollment.is_active = False
     enrollment.dropped_at = utcnow()

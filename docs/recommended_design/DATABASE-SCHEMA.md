@@ -2,7 +2,8 @@
 
 ## Overview
 
-PostgreSQL database with 8 main tables for users, courses, sessions, check-ins, devices, risk signals, and audit logs.
+PostgreSQL database with 9 main tables, including explicit course ownership and
+TA-course assignments used by backend authorization.
 
 ---
 
@@ -16,6 +17,7 @@ Users ─┬─< Enrollments >── Courses
        ├─< CheckIns >── Sessions ──< Courses
        │                    │
        └─< AuditLogs        └─< RiskSignals
+Users ──< CourseTAs >── Courses
 ```
 
 ---
@@ -61,6 +63,7 @@ Course information.
 | description | TEXT | NULLABLE | Description |
 | semester | VARCHAR(20) | NOT NULL | e.g., "AY2024-25 Sem 1" |
 | is_active | BOOLEAN | NOT NULL, DEFAULT TRUE | Active status |
+| instructor_id | VARCHAR(36) | FK(users.id), NULLABLE | Assigned course instructor |
 | venue_latitude | FLOAT | NULLABLE | Default venue lat |
 | venue_longitude | FLOAT | NULLABLE | Default venue lng |
 | venue_name | VARCHAR(255) | NULLABLE | Venue name |
@@ -73,11 +76,28 @@ Course information.
 
 **Indexes:** code, semester, is_active
 
-**Note:** there is deliberately no `instructor_id` column on `courses`. The
-instructor is recorded per session (`sessions.instructor_id`), since different
-sessions of a course may be run by different instructors/TAs. If your design
-needs a course-level instructor, add a nullable `instructor_id` FK(users.id)
-column; the API specification and tests do not require it.
+Course ownership is recorded on the course and is the authoritative scope for
+instructor reads and writes. Session-level `instructor_id` records who created
+the session; it does not grant access to a course the user does not own.
+
+---
+
+### course_tas
+
+Explicit TA-to-course assignments. Only administrators may create or remove
+assignments; assigned TAs receive session check-in and flagged-review access
+for those courses.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| id | VARCHAR(36) | PK | Assignment UUID |
+| course_id | VARCHAR(36) | FK(courses.id), NOT NULL | Assigned course |
+| ta_id | VARCHAR(36) | FK(users.id), NOT NULL | Assigned TA |
+| assigned_by_id | VARCHAR(36) | FK(users.id), NULLABLE | Admin who created the assignment |
+| assigned_at | TIMESTAMP | NOT NULL | Assignment time |
+
+**Constraints:** `course_id` and `ta_id` are unique as a pair.
+**Indexes:** `(ta_id, course_id)`
 
 ---
 

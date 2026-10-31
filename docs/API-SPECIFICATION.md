@@ -17,9 +17,14 @@ Authorization: Bearer <access_token>
 | Role | Description | Permissions |
 |------|-------------|-------------|
 | `student` | Students checking into classes | Check-in, view own records, manage own devices |
-| `ta` | Teaching assistants | Student permissions + view session check-ins, review flagged check-ins |
-| `instructor` | Course instructors | TA permissions + manage sessions, view course analytics, manage enrollments |
+| `ta` | Teaching assistants | Student permissions + view session check-ins and review flagged check-ins for assigned courses |
+| `instructor` | Course instructors | TA permissions + manage sessions, view course analytics, and manage enrollments for owned courses |
 | `admin` | System administrators | Full access to all endpoints |
+
+Course staff reads, mutations, reviews, analytics, and exports are scoped to
+the instructor's owned courses or a TA's explicit course assignments. Admin
+access is system-wide. Students may access only their own attendance records
+and devices.
 
 ---
 
@@ -246,7 +251,9 @@ const response = await fetch('/api/v1/users/me/face/enroll', {
 ### Courses
 
 #### GET /courses/
-List courses with optional filters. **Requires auth.**
+List active courses with optional filters. The catalog is publicly readable;
+authenticated instructors and TAs only receive courses they are authorized to
+access.
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -280,13 +287,12 @@ List courses with optional filters. **Requires auth.**
 }
 ```
 
-> **Note:** courses have no `instructor_id` / `instructor_name` field. In the
-> recommended schema (`recommended_design/DATABASE-SCHEMA.md`) the instructor is
-> linked per session via `sessions.instructor_id`. You may add a course-level
-> `instructor_id` in your own design; the tests do not check for it.
+Course responses include `instructor_id` and `instructor_name` in this
+implementation; instructor data access is scoped to the course owner.
 
 #### GET /courses/{course_id}
-Get course details. **Requires auth.**
+Get course details. Catalog metadata is publicly readable. Instructors and
+TAs must be authorized for the requested course.
 
 **Response:** `200 OK` - Returns full course object including:
 - Course metadata
@@ -331,6 +337,24 @@ Soft-delete a course (sets is_active=false). **Requires auth (admin only).**
 
 **Response:** `204 No Content`
 
+#### GET /courses/{course_id}/tas
+List the assigned teaching assistants. **Requires auth (admin or course
+instructor/assigned TA).**
+
+#### POST /courses/{course_id}/tas
+Assign a TA to a course. **Requires auth (admin only).**
+
+**Request:**
+```json
+{"ta_id": "uuid"}
+```
+
+The target user must be an active account with the `ta` role. Duplicate
+assignments return `409 Conflict`.
+
+#### DELETE /courses/{course_id}/tas/{ta_id}
+Remove a course TA assignment. **Requires auth (admin only).**
+
 ---
 
 ### Sessions
@@ -338,7 +362,9 @@ Soft-delete a course (sets is_active=false). **Requires auth (admin only).**
 Sessions represent class meetings where students check in.
 
 #### GET /sessions/
-List all sessions with filters. **Requires auth (instructor/admin).**
+List all sessions with filters. **Requires auth (instructor, assigned TA, or
+admin).** Instructors and TAs only receive sessions in courses they own or are
+assigned to.
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -623,7 +649,7 @@ Get current student's check-in history. **Requires auth (student).**
 ```
 
 #### GET /checkins/session/{session_id}
-Get all check-ins for a session. **Requires auth (instructor/TA).**
+Get all check-ins for a session. **Requires auth (assigned instructor/TA).**
 
 **Response:** `200 OK`
 ```json
@@ -645,7 +671,8 @@ Get all check-ins for a session. **Requires auth (instructor/TA).**
 ```
 
 #### GET /checkins/flagged
-Get check-ins requiring review (flagged or appealed). **Requires auth (instructor/TA).**
+Get check-ins requiring review (flagged or appealed). **Requires auth
+(assigned instructor/TA).**
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -691,7 +718,8 @@ Get "approved with flag" check-ins: status `approved` with `risk_score >= 0.3` (
 **Response:** `200 OK` - Paginated list in the same shape as `/checkins/flagged`. List items now also carry `risk_level`, `approved_with_flag`, `reviewed_at` and `review_notes`.
 
 #### GET /checkins/{checkin_id}
-Get specific check-in details. **Requires auth (owner student, or instructor/TA for session).**
+Get specific check-in details. **Requires auth (owner student, or assigned
+instructor/TA for the session).**
 
 **Response:** `200 OK` - Returns full check-in object with all risk signals
 
@@ -721,7 +749,8 @@ Appeal a rejected/flagged check-in. **Requires auth (student, must be owner).**
 - Appeal window: 7 days from check-in
 
 #### POST /checkins/{id}/review
-Review a flagged/appealed check-in. **Requires auth (instructor/TA for the session's course).**
+Review a flagged/appealed check-in. **Requires auth (assigned instructor/TA
+for the session's course).**
 
 **Request:**
 ```json
@@ -749,7 +778,10 @@ Review a flagged/appealed check-in. **Requires auth (instructor/TA for the sessi
 Analytics endpoints for the instructor dashboard.
 
 #### GET /stats/overview
-Get system-wide statistics. **Requires auth (instructor/admin).**
+Get scoped statistics. **Requires auth (instructor/admin).** Instructors
+receive metrics only for owned courses; admins receive system-wide metrics.
+Attendance percentages count approved check-ins only; pending, flagged,
+rejected, and appealed records do not count as verified attendance.
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -783,7 +815,8 @@ Get system-wide statistics. **Requires auth (instructor/admin).**
 ```
 
 #### GET /stats/sessions/{session_id}
-Get statistics for a specific session. **Requires auth (instructor/TA for session's course).**
+Get statistics for a specific session. **Requires auth (instructor/admin for
+the session's course).**
 
 **Response:** `200 OK`
 ```json
@@ -825,8 +858,8 @@ Get attendance statistics for a course. **Requires auth (instructor for course, 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `start_date` | ISO8601 | semester start | Start of date range |
-| `end_date` | ISO8601 | today | End of date range |
+| `start_date` | ISO8601 timestamp | none | Inclusive session start |
+| `end_date` | ISO8601 timestamp | none | Inclusive session end |
 
 **Response:** `200 OK`
 ```json
@@ -867,7 +900,9 @@ Get attendance statistics for a course. **Requires auth (instructor for course, 
 ```
 
 #### GET /stats/students/{student_id}
-Get attendance statistics for a specific student. **Requires auth (instructor for student's courses, or admin).**
+Get attendance statistics for a specific student. **Requires auth (the
+student for their own record, or an instructor/admin assigned to an enrolled
+course).**
 
 **Response:** `200 OK`
 ```json
@@ -1006,7 +1041,8 @@ Get current student's course enrollments. **Requires auth (student).**
 ```
 
 #### GET /enrollments/course/{course_id}
-Get all students enrolled in a course. **Requires auth (instructor/TA for course).**
+Get all students enrolled in a course. **Requires auth (instructor/admin for
+the course).**
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -1167,14 +1203,15 @@ Get audit logs with comprehensive filtering. **Requires auth (admin only).**
 Data export endpoints for reporting.
 
 #### GET /export/attendance/{course_id}
-Export attendance data for a course. **Requires auth (instructor for course).**
+Export attendance data for a course. **Requires auth (instructor, assigned TA,
+or admin for the course).**
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `format` | string | csv | Export format (csv\|json) |
-| `start_date` | ISO8601 | semester start | Start date |
-| `end_date` | ISO8601 | today | End date |
+| `start_date` | ISO8601 date or timestamp | none | Inclusive start date/time |
+| `end_date` | ISO8601 date or timestamp | none | Inclusive end date/time |
 
 **Response:** `200 OK`
 - `format=csv`: Returns CSV file download
@@ -1182,11 +1219,12 @@ Export attendance data for a course. **Requires auth (instructor for course).**
 
 **CSV Columns:**
 ```csv
-student_id,student_name,student_email,session_date,session_name,status,checked_in_at,risk_score
+student_id,student_name,student_email,course_code,course_name,session_id,session_name,session_date,status,checked_in_at,risk_score,distance_from_venue_meters
 ```
 
 #### GET /export/session/{session_id}
-Export check-in data for a session. **Requires auth (instructor for session).**
+Export check-in data for a session. **Requires auth (instructor, assigned TA,
+or admin for the session's course).**
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -1194,6 +1232,10 @@ Export check-in data for a session. **Requires auth (instructor for session).**
 | `format` | string | csv | Export format (csv\|json) |
 
 **Response:** `200 OK` - Returns downloadable file
+
+CSV uses UTF-8 encoding, standard CSV quoting, and neutralizes spreadsheet
+formula prefixes in text cells. Exported attendance rates use approved
+check-ins divided by eligible enrollment slots.
 
 ---
 

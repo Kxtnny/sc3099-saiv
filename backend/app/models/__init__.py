@@ -1,13 +1,14 @@
 """
-SQLAlchemy models - all 8 tables from docs/recommended_design/DATABASE-SCHEMA.md.
+SQLAlchemy models registered in the application's database metadata.
 
-Importing this package registers every table on Base.metadata, which is what
-init_db() relies on to create the schema.
+Importing this package registers every table on Base.metadata, which init_db()
+uses to create missing tables, including the TA-course assignment table.
 """
 
 from app.models.audit_log import AuditLog
 from app.models.checkin import CheckIn
 from app.models.course import Course
+from app.models.course_ta import CourseTA
 from app.models.device import Device
 from app.models.enrollment import Enrollment
 from app.models.risk_signal import RiskSignal
@@ -19,6 +20,7 @@ __all__ = [
     "AttendanceSession",
     "CheckIn",
     "Course",
+    "CourseTA",
     "Device",
     "Enrollment",
     "RiskSignal",

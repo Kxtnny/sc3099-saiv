@@ -57,9 +57,20 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 | Role | Level | Access |
 |------|-------|--------|
 | admin | 4 | Full system access |
-| instructor | 3 | Course management, all student data |
-| ta | 2 | Session management, course student data |
+| instructor | 3 | Manage sessions, analytics, and enrollments for owned courses |
+| ta | 2 | View session check-ins and review flagged check-ins for assigned courses |
 | student | 1 | Own data only |
+
+Instructors and TAs must be authorized against the requested course or
+session on every list, detail, mutation, review, analytics, and export request.
+An instructor's access is derived from course ownership; TA access requires an
+explicit admin-managed course assignment. TAs cannot manage sessions or
+enrollments. Admin access is system-wide.
+
+Public registration must not grant a role supplied by the caller. Roles above
+`student` require administrator provisioning. The current registration schema
+still accepts caller-selected roles; a secure bootstrap/provisioning workflow
+is a known release blocker.
 
 ### Endpoint Permissions
 
@@ -69,6 +80,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 | POST /checkins/ | Yes | No | No | No |
 | GET /checkins/session/{id} | No | Yes | Yes | Yes |
 | POST /sessions/ | No | No | Yes | Yes |
+| GET /enrollments/course/{id} | No | No | Owned course | Yes |
+| POST /enrollments/ | No | No | Owned course | Yes |
 | GET /audit/ | No | No | No | Yes |
 
 ---
