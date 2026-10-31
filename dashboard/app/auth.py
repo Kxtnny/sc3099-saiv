@@ -3,10 +3,13 @@ Authentication & session state management for the Streamlit dashboard.
 """
 
 from typing import Any, Dict, Optional
+import html
+
 import streamlit as st
 
 from app.api_client import api_client
 from app.config import STAFF_ROLES
+from app.rbac import Permission, has_permission, role_for_user
 from app.views._messages import render_flash_message, set_flash_message
 
 
@@ -69,14 +72,12 @@ def _refresh_expired_access_token(expired_access_token: str) -> Optional[str]:
 
 def can_view_audit(user: Optional[Dict[str, Any]]) -> bool:
     """Audit data and exports are restricted to administrators."""
-    return bool(user and (user.get("role") or "").lower() == "admin")
+    return has_permission(user, Permission.VIEW_AUDIT)
 
 
 def can_create_sessions(user: Optional[Dict[str, Any]]) -> bool:
-    """Match the backend's instructor-or-admin session creation rule."""
-    return bool(
-        user and (user.get("role") or "").lower() in {"admin", "instructor"}
-    )
+    """Check the centralized session-management permission."""
+    return has_permission(user, Permission.MANAGE_SESSIONS)
 
 
 def can_manage_session(
@@ -84,14 +85,14 @@ def can_manage_session(
     session: Dict[str, Any],
     course: Optional[Dict[str, Any]],
 ) -> bool:
-    """Match the backend's admin, session-creator, or course-instructor rule."""
-    if not user:
+    """Allow only admins and instructors to manage sessions within their scope."""
+    if not isinstance(user, dict) or not has_permission(
+        user, Permission.MANAGE_SESSIONS
+    ):
         return False
-    role = (user.get("role") or "").lower()
+    role = role_for_user(user)
     if role == "admin":
         return True
-    if role not in {"instructor", "ta"}:
-        return False
 
     user_id = user.get("id")
     return bool(
@@ -119,14 +120,14 @@ def logout_user() -> None:
 
 
 def render_login_page() -> None:
-    """Render a clean, secure login card for instructors and admins."""
+    """Render the secure login card for all dashboard roles."""
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown(
             """
             <div style="text-align: center; margin-bottom: 2rem; margin-top: 2rem;">
                 <h1 style="color: #1E3A8A; font-size: 2.5rem; margin-bottom: 0.2rem;">🛡️ SAIV</h1>
-                <h3 style="color: #4B5563; font-weight: 500; margin-top: 0;">Instructor & Observability Dashboard</h3>
+                <h3 style="color: #4B5563; font-weight: 500; margin-top: 0;">Attendance & Observability Dashboard</h3>
                 <p style="color: #6B7280; font-size: 0.95rem;">
                     Secure Attendance & Identity Verification System
                 </p>
@@ -138,10 +139,12 @@ def render_login_page() -> None:
         with st.container(border=True):
             render_flash_message()
             st.subheader("Sign In")
-            st.caption("Access requires Instructor, TA, or Administrator credentials.")
+            st.caption(
+                "Sign in with your Student, TA, Instructor, or Administrator account."
+            )
 
             with st.form("login_form", clear_on_submit=False):
-                email = st.text_input("Email Address", placeholder="instructor@ntu.edu.sg")
+                email = st.text_input("Email Address", placeholder="you@ntu.edu.sg")
                 password = st.text_input("Password", type="password", placeholder="••••••••")
                 submitted = st.form_submit_button("Sign In", use_container_width=True, type="primary")
 
@@ -160,7 +163,7 @@ def render_login_page() -> None:
 
                 # Check user role
                 user_info = data.get("user", {})
-                role = user_info.get("role", "").lower()
+                role = role_for_user(user_info)
                 if role not in STAFF_ROLES:
                     st.error(f"Access Denied: Role '{role}' does not have dashboard privileges.")
                     return
@@ -176,12 +179,16 @@ def render_login_page() -> None:
 def render_sidebar_user_profile() -> None:
     """Render the active user's identity card and logout button in the sidebar."""
     user = get_current_user()
-    if not user:
+    if not isinstance(user, dict):
         return
 
     full_name = user.get("full_name") or user.get("email", "User")
     email = user.get("email", "")
-    role = user.get("role", "staff").upper()
+    raw_role = user.get("role")
+    role = raw_role.upper() if isinstance(raw_role, str) else "UNKNOWN"
+    safe_full_name = html.escape(str(full_name))
+    safe_email = html.escape(str(email))
+    safe_role = html.escape(role)
 
     role_colors = {
         "ADMIN": "#EF4444",
@@ -195,11 +202,11 @@ def render_sidebar_user_profile() -> None:
         st.markdown(
             f"""
             <div style="background-color: rgba(243, 244, 246, 0.6); padding: 0.75rem; border-radius: 8px; margin-bottom: 0.5rem;">
-                <div style="font-weight: 600; color: #111827; font-size: 0.95rem;">{full_name}</div>
-                <div style="color: #6B7280; font-size: 0.8rem; word-break: break-all;">{email}</div>
+                <div style="font-weight: 600; color: #111827; font-size: 0.95rem;">{safe_full_name}</div>
+                <div style="color: #6B7280; font-size: 0.8rem; word-break: break-all;">{safe_email}</div>
                 <div style="margin-top: 0.35rem;">
                     <span style="background-color: {badge_color}; color: white; padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; font-weight: 600;">
-                        {role}
+                        {safe_role}
                     </span>
                 </div>
             </div>

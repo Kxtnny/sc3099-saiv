@@ -11,6 +11,8 @@ import streamlit as st
 
 from app.api_client import api_client
 from app.auth import can_create_sessions, can_manage_session, get_current_user, get_token
+from app.access import load_visible_courses
+from app.rbac import Permission, require_permission, role_for_user
 from app.views._downloads import render_csv_download, render_json_download
 from app.views._messages import set_flash_message
 
@@ -64,11 +66,13 @@ def _build_qr_image(secret: str):
 
 def render() -> None:
     """Render Session Management view."""
+    user = get_current_user()
+    if not require_permission(user, Permission.MANAGE_SESSIONS):
+        return
     st.title("📅 Session Management")
     st.caption("Schedule attendance windows, monitor live sessions, project classroom QR codes, and export records.")
 
     token = get_token()
-    user = get_current_user()
     if not token or not user:
         st.warning("Please sign in to manage sessions.")
         return
@@ -99,15 +103,36 @@ def render() -> None:
                 index=0,
             )
         with col_f2:
-            ok_courses, courses_data = api_client.list_courses(token=token)
-            course_map: Dict[str, Optional[str]] = {"All Courses": None}
+            ok_courses, visible_courses, scope_message = load_visible_courses(
+                token, user
+            )
+            if not ok_courses:
+                st.error(scope_message or "Unable to load courses.")
+                return
+            course_map: Dict[str, Optional[str]] = {}
             courses_by_id: Dict[str, Dict[str, Any]] = {}
-            if ok_courses and isinstance(courses_data, dict) and "items" in courses_data:
-                for c in courses_data["items"]:
-                    course_map[f"{c.get('code', '')} - {c.get('name', '')}"] = c.get("id")
-                    if c.get("id"):
-                        courses_by_id[c["id"]] = c
-            selected_course_label = st.selectbox("Filter by Course", options=list(course_map.keys()))
+            if role_for_user(user) == "admin":
+                course_map["All Courses"] = None
+            for course in visible_courses:
+                course_id = course.get("id")
+                if not isinstance(course_id, str) or not course_id:
+                    continue
+                course_map[
+                    f"{course.get('code', '')} - {course.get('name', '')}"
+                ] = course_id
+                courses_by_id[course_id] = course
+            if not course_map or (
+                role_for_user(user) != "admin" and not visible_courses
+            ):
+                st.info(scope_message or "No courses are available for this account.")
+                return
+            courses_data = {"items": visible_courses}
+            course_labels = list(course_map.keys())
+            selected_course_label = st.selectbox(
+                "Filter by Course",
+                options=course_labels,
+                index=0,
+            )
             filter_course_id = course_map[selected_course_label]
 
         with col_f3:
@@ -178,8 +203,19 @@ def render() -> None:
             st.error(f"Failed to load sessions: {res}")
             return
 
-        sessions: List[Dict[str, Any]] = res.get("items", []) if isinstance(res, dict) else []
-        total_sessions = res.get("total", len(sessions)) if isinstance(res, dict) else len(sessions)
+        if not isinstance(res, dict) or not isinstance(res.get("items"), list):
+            st.error("Failed to load sessions: invalid response format.")
+            return
+        sessions = res["items"]
+        total_sessions = res.get("total")
+        if (
+            not isinstance(total_sessions, int)
+            or isinstance(total_sessions, bool)
+            or total_sessions < 0
+            or any(not isinstance(session, dict) for session in sessions)
+        ):
+            st.error("Failed to load sessions: invalid response data.")
+            return
         page_count = max(1, (total_sessions + page_limit - 1) // page_limit)
         nav_prev, nav_page, nav_next = st.columns([1, 3, 1])
         with nav_prev:
@@ -212,6 +248,8 @@ def render() -> None:
                 can_manage = can_manage_session(
                     user, s, courses_by_id.get(s.get("course_id"))
                 )
+                if role_for_user(user) == "instructor" and not can_manage:
+                    continue
                 scheduled_start = _format_singapore_time(s.get("scheduled_start"))
                 scheduled_end = _format_singapore_time(s.get("scheduled_end"))
                 venue = s.get("venue_name") or "Campus Venue"
@@ -283,7 +321,7 @@ def render() -> None:
 
                         analytics_data = st.session_state.get(analytics_key)
                         if isinstance(analytics_data, dict):
-                            metric_columns = st.columns(4)
+                            metric_columns = st.columns(5)
                             with metric_columns[0]:
                                 st.metric(
                                     "Attendance rate",
@@ -301,6 +339,14 @@ def render() -> None:
                                     + analytics_data.get("appealed_count", 0),
                                 )
                             with metric_columns[3]:
+                                st.metric(
+                                    "Check-ins",
+                                    analytics_data.get(
+                                        "checked_in_count",
+                                        analytics_data.get("checked_in", "Unavailable"),
+                                    ),
+                                )
+                            with metric_columns[4]:
                                 st.metric(
                                     "Average risk",
                                     f"{analytics_data.get('average_risk_score', 0):.2f}",
@@ -582,7 +628,9 @@ def render() -> None:
                     # Classroom QR Code Projector (the backend lets only session owners issue QR codes)
                     qr_key = f"qr_open_{session_id}"
                     with btn_col2:
-                        if can_manage and st.button("📱 Classroom QR Mode", key=f"btn_qr_{session_id}"):
+                        if can_manage and st.button(
+                            "📱 Classroom QR Mode", key=f"btn_qr_{session_id}"
+                        ):
                             st.session_state[qr_key] = not st.session_state.get(qr_key, False)
 
                     with btn_col3:
@@ -671,6 +719,10 @@ def render() -> None:
                         f"session_checkins_{sha256(token.encode('utf-8')).hexdigest()}_{session_id}"
                     )
                     with st.expander("View session check-ins"):
+                        if not require_permission(
+                            user, Permission.VIEW_SESSION_CHECKINS
+                        ):
+                            continue
                         has_checkins = checkins_state_key in st.session_state
                         if st.button(
                             "🔄 Refresh check-ins" if has_checkins else "📋 Load check-ins",

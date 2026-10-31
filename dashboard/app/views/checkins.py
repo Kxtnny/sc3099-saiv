@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 
 from app.api_client import api_client
-from app.auth import get_token
+from app.auth import get_current_user, get_token
+from app.rbac import Permission, require_permission
 
 
 def _utc_date_bound(value: date, *, end: bool = False) -> str:
@@ -24,6 +25,10 @@ def _utc_date_bound(value: date, *, end: bool = False) -> str:
 
 def render() -> None:
     """Render Check-in Explorer view."""
+    if not require_permission(
+        get_current_user(), Permission.VIEW_CHECKIN_EXPLORER
+    ):
+        return
     st.title("📋 Check-in Explorer")
     st.caption("Search, filter, and inspect detailed multi-signal verification records across all courses.")
 
@@ -64,8 +69,17 @@ def render() -> None:
         with col_f1:
             ok_courses, courses_data = api_client.list_courses(token=token)
             course_map: Dict[str, Optional[str]] = {"All Courses": None}
-            if ok_courses and isinstance(courses_data, dict) and "items" in courses_data:
+            if not ok_courses:
+                st.error(f"Unable to load course filters: {courses_data}")
+            elif (
+                not isinstance(courses_data, dict)
+                or not isinstance(courses_data.get("items"), list)
+            ):
+                st.error("Unable to load course filters: invalid response format.")
+            else:
                 for c in courses_data["items"]:
+                    if not isinstance(c, dict):
+                        continue
                     course_map[f"{c.get('code')} - {c.get('name')}"] = c.get("id")
             selected_course_label = st.selectbox("Course", options=list(course_map.keys()), key="ci_course")
             course_filter = course_map[selected_course_label]
@@ -89,7 +103,13 @@ def render() -> None:
             limit=100,
         )
         if ok_sessions and isinstance(session_response, dict):
-            for session in session_response.get("items", []):
+            session_items = session_response.get("items")
+            if not isinstance(session_items, list):
+                st.error("Unable to load sessions for filtering: invalid response format.")
+                session_items = []
+            for session in session_items:
+                if not isinstance(session, dict):
+                    continue
                 label = (
                     f"{session.get('name', 'Session')} · "
                     f"{session.get('scheduled_start', '')[:10]}"
@@ -97,6 +117,8 @@ def render() -> None:
                 session_options[label] = session.get("id")
         elif not ok_sessions:
             st.error(f"Unable to load sessions for filtering: {session_response}")
+        else:
+            st.error("Unable to load sessions for filtering: invalid response format.")
         selected_session_label = st.selectbox(
             "Session",
             options=list(session_options.keys()),
@@ -168,8 +190,19 @@ def render() -> None:
         st.error(f"Failed to fetch check-ins: {res}")
         return
 
-    items: List[Dict[str, Any]] = res.get("items", []) if isinstance(res, dict) else []
-    total = res.get("total", len(items)) if isinstance(res, dict) else len(items)
+    if not isinstance(res, dict) or not isinstance(res.get("items"), list):
+        st.error("Failed to fetch check-ins: invalid response format.")
+        return
+    items = res["items"]
+    total = res.get("total")
+    if (
+        not isinstance(total, int)
+        or isinstance(total, bool)
+        or total < 0
+        or any(not isinstance(item, dict) for item in items)
+    ):
+        st.error("Failed to fetch check-ins: invalid response data.")
+        return
     page_count = max(1, (total + page_limit - 1) // page_limit)
     nav_prev, nav_page, nav_next = st.columns([1, 3, 1])
     with nav_prev:

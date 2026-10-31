@@ -46,6 +46,12 @@ class User(Base):
         foreign_keys="CheckIn.student_id",
         cascade="all, delete-orphan",
     )
+    course_assignments = relationship(
+        "CourseTA",
+        foreign_keys="CourseTA.ta_id",
+        back_populates="ta",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ix_users_role_active", "role", "is_active"),

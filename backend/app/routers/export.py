@@ -8,6 +8,7 @@ audit event naming who exported what.
 import csv
 import io
 import logging
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -15,10 +16,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
-from app.core.utils import utcnow
+from app.core.utils import to_naive_utc, utcnow
 from app.dependencies import require_staff
 from app.enums import AuditAction, CheckInStatus
 from app.models import AttendanceSession, CheckIn, Course, Enrollment, User
+from app.services.authorization import require_course_access, require_session_access
 from app.services.audit import log_action
 
 logger = logging.getLogger(__name__)
@@ -43,17 +45,45 @@ CSV_COLUMNS = [
 
 def _csv_response(rows: List[dict], filename: str) -> StreamingResponse:
     """Render rows as a downloadable CSV."""
-    buffer = io.StringIO()
+    buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(rows)
-    buffer.seek(0)
+    writer.writerows(
+        {
+            key: (
+                f"'{value}"
+                if isinstance(value, str)
+                and value.lstrip().startswith(("=", "+", "-", "@"))
+                else value
+            )
+            for key, value in row.items()
+        }
+        for row in rows
+    )
+    payload = buffer.getvalue().encode("utf-8-sig")
 
     return StreamingResponse(
-        iter([buffer.getvalue()]),
-        media_type="text/csv",
+        iter([payload]),
+        media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _parse_date_filter(
+    value: Optional[str], *, end_of_day: bool = False
+) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Date filters must be ISO 8601 timestamps",
+        ) from exc
+    if len(value) == 10 and end_of_day:
+        parsed += timedelta(days=1, microseconds=-1)
+    return to_naive_utc(parsed)
 
 
 def _row(checkin: CheckIn) -> dict:
@@ -81,7 +111,7 @@ def _row(checkin: CheckIn) -> dict:
 def export_session(
     session_id: str,
     request: Request,
-    export_format: str = Query(default="json", alias="format", pattern="^(csv|json)$"),
+    export_format: str = Query(default="csv", alias="format", pattern="^(csv|json)$"),
     staff: User = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
@@ -96,6 +126,7 @@ def export_session(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
         )
+    require_session_access(db, staff, session)
 
     checkins = (
         db.query(CheckIn)
@@ -150,7 +181,7 @@ def export_session(
             "approved": approved,
             "flagged": flagged,
             "attendance_rate": (
-                round(len(checkins) / total_enrolled, 4) if total_enrolled else 0.0
+                round(approved / total_enrolled, 4) if total_enrolled else 0.0
             ),
         },
         "records": records,
@@ -173,6 +204,15 @@ def export_course_attendance(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Course not found"
         )
+    require_course_access(db, staff, course_id)
+
+    start = _parse_date_filter(start_date)
+    end = _parse_date_filter(end_date, end_of_day=True)
+    if start and end and start > end:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="start_date must be earlier than or equal to end_date",
+        )
 
     query = (
         db.query(CheckIn)
@@ -183,10 +223,10 @@ def export_course_attendance(
         .join(AttendanceSession, AttendanceSession.id == CheckIn.session_id)
         .filter(AttendanceSession.course_id == course_id)
     )
-    if start_date:
-        query = query.filter(CheckIn.checked_in_at >= start_date)
-    if end_date:
-        query = query.filter(CheckIn.checked_in_at <= end_date)
+    if start:
+        query = query.filter(CheckIn.checked_in_at >= start)
+    if end:
+        query = query.filter(CheckIn.checked_in_at <= end)
 
     checkins = query.order_by(CheckIn.checked_in_at).all()
     records = [_row(c) for c in checkins]
@@ -198,11 +238,14 @@ def export_course_attendance(
         )
         .count()
     )
-    total_sessions = (
-        db.query(AttendanceSession)
-        .filter(AttendanceSession.course_id == course_id)
-        .count()
+    session_query = db.query(AttendanceSession).filter(
+        AttendanceSession.course_id == course_id
     )
+    if start:
+        session_query = session_query.filter(AttendanceSession.scheduled_start >= start)
+    if end:
+        session_query = session_query.filter(AttendanceSession.scheduled_start <= end)
+    total_sessions = session_query.count()
 
     log_action(
         db,
@@ -218,6 +261,10 @@ def export_course_attendance(
     if export_format == "csv":
         return _csv_response(records, f"attendance_{course.code}.csv")
 
+    approved = sum(
+        1 for checkin in checkins
+        if checkin.status == CheckInStatus.APPROVED.value
+    )
     possible = total_enrolled * total_sessions
     return {
         "course_id": course.id,
@@ -228,7 +275,7 @@ def export_course_attendance(
             "total_sessions": total_sessions,
             "total_checkins": len(records),
             "attendance_rate": (
-                round(len(records) / possible, 4) if possible else 0.0
+                round(approved / possible, 4) if possible else 0.0
             ),
         },
         "records": records,

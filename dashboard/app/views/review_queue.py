@@ -5,10 +5,14 @@ Review Queue View - Review, investigate, and approve or reject flagged & appeale
 import math
 from numbers import Real
 from typing import Any, Dict, List, Optional
+import html
+
 import streamlit as st
 
 from app.api_client import api_client
-from app.auth import get_token
+from app.auth import get_current_user, get_token
+from app.access import load_visible_courses
+from app.rbac import Permission, require_permission
 from app.views._messages import set_flash_message
 
 
@@ -35,6 +39,11 @@ def _factor_score(risk_factor: Any) -> Optional[float]:
 
 def render() -> None:
     """Render the Flagged & Appealed Check-ins Review Queue."""
+    user = get_current_user()
+    if not require_permission(
+        user, Permission.REVIEW_FLAGGED_CHECKINS
+    ):
+        return
     st.title("🚨 Flagged Check-ins Review Queue")
     st.caption("Review suspicious check-ins flagged by multi-signal risk heuristics, or student appeals.")
 
@@ -46,12 +55,27 @@ def render() -> None:
     # Filter controls
     col_f1, col_f2, col_btn = st.columns([2, 2, 1])
     with col_f1:
-        ok_courses, courses_data = api_client.list_courses(token=token)
-        course_map = {"All Courses": None}
-        if ok_courses and isinstance(courses_data, dict) and "items" in courses_data:
-            for c in courses_data["items"]:
-                course_map[f"{c.get('code')} - {c.get('name')}"] = c.get("id")
-        selected_course_label = st.selectbox("Filter by Course", options=list(course_map.keys()), key="rq_course_filter")
+        ok_courses, visible_courses, scope_message = load_visible_courses(
+            token, user
+        )
+        if not ok_courses:
+            st.error(scope_message or "Unable to load courses.")
+            return
+        course_map = {"All Courses": None} if user.get("role") == "admin" else {}
+        for course in visible_courses:
+            course_id = course.get("id")
+            if isinstance(course_id, str) and course_id:
+                course_map[
+                    f"{course.get('code')} - {course.get('name')}"
+                ] = course_id
+        if not course_map:
+            st.info(scope_message or "No assigned courses are available.")
+            return
+        selected_course_label = st.selectbox(
+            "Filter by Course",
+            options=list(course_map.keys()),
+            key="rq_course_filter",
+        )
         course_filter_id = course_map[selected_course_label]
 
     with col_btn:
@@ -77,8 +101,19 @@ def render() -> None:
         st.error(f"Failed to load flagged check-ins: {res}")
         return
 
-    items: List[Dict[str, Any]] = res.get("items", []) if isinstance(res, dict) else []
-    total = res.get("total", len(items)) if isinstance(res, dict) else len(items)
+    if not isinstance(res, dict) or not isinstance(res.get("items"), list):
+        st.error("Failed to load flagged check-ins: invalid response format.")
+        return
+    items = res["items"]
+    total = res.get("total")
+    if (
+        not isinstance(total, int)
+        or isinstance(total, bool)
+        or total < 0
+        or any(not isinstance(item, dict) for item in items)
+    ):
+        st.error("Failed to load flagged check-ins: invalid response data.")
+        return
     page_count = max(1, (total + page_limit - 1) // page_limit)
     nav_prev, nav_page, nav_next = st.columns([1, 3, 1])
     with nav_prev:
@@ -126,7 +161,10 @@ def render() -> None:
             head_col1, head_col2 = st.columns([3, 1])
             with head_col1:
                 st.markdown(
-                    f"### {student_name} (`{student_email}`) — <span style='color:{border_color}; font-size:1.1rem; font-weight:700;'>{badge_text}</span>",
+                    f"<h3>{html.escape(str(student_name))} "
+                    f"<small>({html.escape(str(student_email))})</small> — "
+                    f"<span style='color:{border_color}; font-size:1.1rem; "
+                    f"font-weight:700;'>{badge_text}</span></h3>",
                     unsafe_allow_html=True,
                 )
                 st.caption(f"Course: **{course_code}** | Session: **{session_name}** | Time: **{timestamp} UTC**")
@@ -192,6 +230,10 @@ def render() -> None:
                 st.write("")
                 st.write("")
                 if st.button("✅ Approve", key=f"app_{checkin_id}", type="primary", use_container_width=True):
+                    if not require_permission(
+                        user, Permission.REVIEW_FLAGGED_CHECKINS
+                    ):
+                        return
                     with st.spinner("Approving check-in..."):
                         ok_rev, rev_res = api_client.review_checkin(
                             token=token,
@@ -209,6 +251,10 @@ def render() -> None:
                 st.write("")
                 st.write("")
                 if st.button("❌ Reject", key=f"rej_{checkin_id}", use_container_width=True):
+                    if not require_permission(
+                        user, Permission.REVIEW_FLAGGED_CHECKINS
+                    ):
+                        return
                     with st.spinner("Rejecting check-in..."):
                         ok_rev, rev_res = api_client.review_checkin(
                             token=token,

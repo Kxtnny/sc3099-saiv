@@ -179,12 +179,27 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
-    def get_course_stats(self, token: str, course_id: str) -> Tuple[bool, Any]:
-        """Fetch analytics across all sessions in a course."""
+    def get_course_stats(
+        self,
+        token: str,
+        course_id: str,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Tuple[bool, Any]:
+        """Fetch analytics across a course, optionally limited to a date range."""
         url = f"{self.base_url}/stats/courses/{course_id}"
+        params: Dict[str, Any] = {}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         try:
             res = self.session.get(
-                url, headers=self._headers(token), timeout=DEFAULT_TIMEOUT
+                url,
+                headers=self._headers(token),
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
             )
             return self._handle_response(res)
         except Exception as e:
@@ -245,6 +260,22 @@ class APIClient:
         url = f"{self.base_url}/sessions/active"
         try:
             res = self.session.get(url, timeout=DEFAULT_TIMEOUT)
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def get_my_sessions(
+        self, token: str, limit: int = 100
+    ) -> Tuple[bool, Any]:
+        """List sessions associated with the authenticated user."""
+        url = f"{self.base_url}/sessions/my-sessions"
+        try:
+            res = self.session.get(
+                url,
+                headers=self._headers(token),
+                params={"limit": limit},
+                timeout=DEFAULT_TIMEOUT,
+            )
             return self._handle_response(res)
         except Exception as e:
             return False, f"Connection error: {e}"
@@ -398,6 +429,22 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
+    def get_my_checkins(
+        self, token: str, limit: int = 100
+    ) -> Tuple[bool, Any]:
+        """Fetch the authenticated user's own attendance history."""
+        url = f"{self.base_url}/checkins/my-checkins"
+        try:
+            res = self.session.get(
+                url,
+                headers=self._headers(token),
+                params={"limit": limit},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
     def get_session_checkins(self, token: str, session_id: str) -> Tuple[bool, Any]:
         """Fetch all check-ins for a specific session."""
         url = f"{self.base_url}/checkins/session/{session_id}"
@@ -415,6 +462,22 @@ class APIClient:
         try:
             res = self.session.get(
                 url, headers=self._headers(token), timeout=DEFAULT_TIMEOUT
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def appeal_checkin(
+        self, token: str, checkin_id: str, appeal_reason: str
+    ) -> Tuple[bool, Any]:
+        """Submit an appeal for the authenticated student's own check-in."""
+        url = f"{self.base_url}/checkins/{checkin_id}/appeal"
+        try:
+            res = self.session.post(
+                url,
+                headers=self._headers(token),
+                json={"appeal_reason": appeal_reason},
+                timeout=DEFAULT_TIMEOUT,
             )
             return self._handle_response(res)
         except Exception as e:
@@ -443,9 +506,142 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
+    def get_my_devices(self, token: str) -> Tuple[bool, Any]:
+        """Fetch devices belonging to the authenticated user."""
+        url = f"{self.base_url}/devices/my-devices"
+        try:
+            res = self.session.get(
+                url, headers=self._headers(token), timeout=DEFAULT_TIMEOUT
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def update_device(
+        self,
+        token: str,
+        device_id: str,
+        *,
+        device_name: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        is_trusted: Optional[bool] = None,
+    ) -> Tuple[bool, Any]:
+        """Update device fields; changing trust is an admin-only API action."""
+        payload: Dict[str, Any] = {}
+        if device_name is not None:
+            payload["device_name"] = device_name
+        if is_active is not None:
+            payload["is_active"] = is_active
+        if is_trusted is not None:
+            payload["is_trusted"] = is_trusted
+        url = f"{self.base_url}/devices/{device_id}"
+        try:
+            res = self.session.patch(
+                url,
+                headers=self._headers(token),
+                json=payload,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def list_devices(
+        self,
+        token: str,
+        *,
+        is_active: Optional[bool] = None,
+        is_trusted: Optional[bool] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[bool, Any]:
+        """List system devices using the admin-only endpoint."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if is_active is not None:
+            params["is_active"] = is_active
+        if is_trusted is not None:
+            params["is_trusted"] = is_trusted
+        try:
+            res = self.session.get(
+                f"{self.base_url}/devices/",
+                headers=self._headers(token),
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def revoke_device(self, token: str, device_id: str) -> Tuple[bool, Any]:
+        """Revoke an owned device."""
+        url = f"{self.base_url}/devices/{device_id}"
+        try:
+            res = self.session.delete(
+                url, headers=self._headers(token), timeout=DEFAULT_TIMEOUT
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
     # -------------------------------------------------------------------------
     # Courses & Enrollments
     # -------------------------------------------------------------------------
+
+    def list_users(
+        self,
+        token: str,
+        *,
+        role: Optional[str] = None,
+        is_active: Optional[bool] = True,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Tuple[bool, Any]:
+        """List users using the admin-only paginated API."""
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if role:
+            params["role"] = role
+        if is_active is not None:
+            params["is_active"] = is_active
+        try:
+            res = self.session.get(
+                f"{self.base_url}/users/",
+                headers=self._headers(token),
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def update_user(
+        self, token: str, user_id: str, payload: Dict[str, Any]
+    ) -> Tuple[bool, Any]:
+        """Update a user's role or active status (admin only)."""
+        try:
+            res = self.session.patch(
+                f"{self.base_url}/users/{user_id}",
+                headers=self._headers(token),
+                json=payload,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def create_users(
+        self, token: str, users: List[Dict[str, Any]]
+    ) -> Tuple[bool, Any]:
+        """Create users through the admin-only bulk account endpoint."""
+        try:
+            res = self.session.post(
+                f"{self.base_url}/admin/users/bulk",
+                headers=self._headers(token),
+                json={"users": users},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
 
     def list_courses(
         self,
@@ -470,6 +666,48 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
+    def create_course(
+        self, token: str, payload: Dict[str, Any]
+    ) -> Tuple[bool, Any]:
+        """Create a course (admin only)."""
+        try:
+            res = self.session.post(
+                f"{self.base_url}/courses/",
+                headers=self._headers(token),
+                json=payload,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def update_course(
+        self, token: str, course_id: str, payload: Dict[str, Any]
+    ) -> Tuple[bool, Any]:
+        """Update a course (admin only)."""
+        try:
+            res = self.session.patch(
+                f"{self.base_url}/courses/{course_id}",
+                headers=self._headers(token),
+                json=payload,
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def delete_course(self, token: str, course_id: str) -> Tuple[bool, Any]:
+        """Soft-delete a course (admin only)."""
+        try:
+            res = self.session.delete(
+                f"{self.base_url}/courses/{course_id}",
+                headers=self._headers(token),
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
     def get_course(
         self, course_id: str, token: Optional[str] = None
     ) -> Tuple[bool, Any]:
@@ -479,6 +717,49 @@ class APIClient:
             res = self.session.get(
                 url,
                 headers=self._headers(token) if token else {},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def get_course_tas(
+        self, token: str, course_id: str
+    ) -> Tuple[bool, Any]:
+        """List TAs assigned to a course."""
+        try:
+            res = self.session.get(
+                f"{self.base_url}/courses/{course_id}/tas",
+                headers=self._headers(token),
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def assign_course_ta(
+        self, token: str, course_id: str, ta_id: str
+    ) -> Tuple[bool, Any]:
+        """Assign a TA to a course (admin only)."""
+        try:
+            res = self.session.post(
+                f"{self.base_url}/courses/{course_id}/tas",
+                headers=self._headers(token),
+                json={"ta_id": ta_id},
+                timeout=DEFAULT_TIMEOUT,
+            )
+            return self._handle_response(res)
+        except Exception as e:
+            return False, f"Connection error: {e}"
+
+    def unassign_course_ta(
+        self, token: str, course_id: str, ta_id: str
+    ) -> Tuple[bool, Any]:
+        """Remove a TA assignment (admin only)."""
+        try:
+            res = self.session.delete(
+                f"{self.base_url}/courses/{course_id}/tas/{ta_id}",
+                headers=self._headers(token),
                 timeout=DEFAULT_TIMEOUT,
             )
             return self._handle_response(res)
@@ -572,12 +853,26 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
-    def export_course_csv(self, token: str, course_id: str) -> Tuple[bool, Any]:
+    def export_course_csv(
+        self,
+        token: str,
+        course_id: str,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Tuple[bool, Any]:
         """Download course attendance as CSV bytes."""
-        url = f"{self.base_url}/export/attendance/{course_id}?format=csv"
+        params: Dict[str, Any] = {"format": "csv"}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         try:
             res = self.session.get(
-                url, headers=self._headers(token), timeout=EXPORT_TIMEOUT
+                f"{self.base_url}/export/attendance/{course_id}",
+                headers=self._headers(token),
+                params=params,
+                timeout=EXPORT_TIMEOUT,
             )
             if res.ok:
                 return True, res.content
@@ -585,12 +880,26 @@ class APIClient:
         except Exception as e:
             return False, f"Connection error: {e}"
 
-    def export_course_json(self, token: str, course_id: str) -> Tuple[bool, Any]:
+    def export_course_json(
+        self,
+        token: str,
+        course_id: str,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Tuple[bool, Any]:
         """Download course attendance as JSON."""
-        url = f"{self.base_url}/export/attendance/{course_id}?format=json"
+        params: Dict[str, Any] = {"format": "json"}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         try:
             res = self.session.get(
-                url, headers=self._headers(token), timeout=EXPORT_TIMEOUT
+                f"{self.base_url}/export/attendance/{course_id}",
+                headers=self._headers(token),
+                params=params,
+                timeout=EXPORT_TIMEOUT,
             )
             return self._handle_response(res)
         except Exception as e:

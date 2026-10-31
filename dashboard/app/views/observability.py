@@ -12,8 +12,13 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 from app.api_client import api_client
-from app.auth import get_token
-from app.config import GRAFANA_URL, PROMETHEUS_URL
+from app.auth import get_current_user, get_token
+from app.config import (
+    GRAFANA_URL,
+    HIGH_FLAGGED_SHARE_THRESHOLD,
+    PROMETHEUS_URL,
+)
+from app.rbac import Permission, require_permission
 
 
 P95_LATENCY_QUERY = (
@@ -26,6 +31,10 @@ ERROR_RATE_QUERY = (
     "/ sum(rate(http_requests_total[5m])) * 100"
 )
 CHECKIN_RATE_QUERY = "sum(rate(checkin_decisions_total[5m]))"
+FLAGGED_SHARE_QUERY = (
+    'sum(increase(checkin_decisions_total{decision="flagged"}[15m])) '
+    "/ clamp_min(sum(increase(checkin_decisions_total[15m])), 1)"
+)
 
 
 def _extract_prom_value(data: Any) -> Optional[float]:
@@ -80,6 +89,10 @@ def _service_state(ok: bool, healthy: bool) -> str:
 
 def render() -> None:
     """Render Observability & System Metrics view."""
+    if not require_permission(
+        get_current_user(), Permission.VIEW_OBSERVABILITY
+    ):
+        return
     st.title("📈 System Observability & Telemetry")
     st.caption(
         "Live health diagnostics, service dependency checks, and Prometheus performance metrics."
@@ -214,6 +227,7 @@ def render() -> None:
             "requests": api_client.query_prometheus(REQUEST_RATE_QUERY),
             "errors": api_client.query_prometheus(ERROR_RATE_QUERY),
             "checkins": api_client.query_prometheus(CHECKIN_RATE_QUERY),
+            "flagged_share": api_client.query_prometheus(FLAGGED_SHARE_QUERY),
         }
         range_results = {
             "p95": api_client.query_prometheus_range(
@@ -250,8 +264,13 @@ def render() -> None:
         if instant_results["checkins"][0]
         else None
     )
+    flagged_share = (
+        _extract_prom_value(instant_results["flagged_share"][1])
+        if instant_results["flagged_share"][0]
+        else None
+    )
 
-    metrics = st.columns(4)
+    metrics = st.columns(5)
     with metrics[0]:
         st.metric(
             "p95 Latency",
@@ -292,9 +311,32 @@ def render() -> None:
             else "Unavailable",
             delta="5-minute moving rate" if checkin_rate is not None else "No data",
         )
+    with metrics[4]:
+        st.metric(
+            "Flagged Check-in Share (15m)",
+            f"{flagged_share:.1%}"
+            if flagged_share is not None
+            else "Unavailable",
+            delta=f"Alert threshold: {HIGH_FLAGGED_SHARE_THRESHOLD:.0%}"
+            if flagged_share is not None
+            else "No data",
+            delta_color=(
+                "inverse"
+                if flagged_share is not None
+                and flagged_share > HIGH_FLAGGED_SHARE_THRESHOLD
+                else "normal"
+            )
+            if flagged_share is not None
+            else "off",
+        )
 
     if error_rate is not None and error_rate > 0:
         st.warning(f"Current 5xx error rate is {error_rate:.2f}%.")
+    if flagged_share is not None and flagged_share > HIGH_FLAGGED_SHARE_THRESHOLD:
+        st.warning(
+            f"High flagged-check-in share: {flagged_share:.1%} over the last "
+            f"15 minutes (threshold: {HIGH_FLAGGED_SHARE_THRESHOLD:.0%})."
+        )
     failed_instants = [
         metric
         for metric, result in instant_results.items()

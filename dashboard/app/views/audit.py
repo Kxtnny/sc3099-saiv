@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 
 from app.api_client import api_client
-from app.auth import can_view_audit, get_current_user, get_token
+from app.auth import get_current_user, get_token
+from app.rbac import Permission, require_permission
 from app.views._downloads import render_csv_download, render_json_download
 
 
@@ -47,8 +48,7 @@ def render() -> None:
         st.warning("Please sign in to view audit logs.")
         return
 
-    if not can_view_audit(user):
-        st.error("Access restricted to Administrators.")
+    if not require_permission(user, Permission.VIEW_AUDIT):
         return
 
     # -------------------------------------------------------------------------

@@ -15,6 +15,9 @@ from streamlit_autorefresh import st_autorefresh
 
 from app.api_client import api_client
 from app.auth import get_token
+from app.auth import get_current_user
+from app.access import load_visible_courses
+from app.rbac import Permission, require_permission, role_for_user
 
 
 SINGAPORE_TIMEZONE = ZoneInfo("Asia/Singapore")
@@ -66,6 +69,20 @@ def _risk_scores(items: Any) -> List[float]:
     return scores
 
 
+def _flagged_share(outcome_counts: Dict[str, Any]) -> Optional[float]:
+    """Return flagged/(all known outcomes), or None for incomplete/empty data."""
+    counts = [outcome_counts.get(status) for status in CHECKIN_STATUSES]
+    if any(
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 0
+        for count in counts
+    ):
+        return None
+    total = sum(counts)
+    return outcome_counts["flagged"] / total if total else None
+
+
 def _daily_counts(items: Any) -> List[Dict[str, Any]]:
     """Aggregate a bounded, course-scoped check-in sample by Singapore day."""
     if not isinstance(items, list):
@@ -88,6 +105,10 @@ def _daily_counts(items: Any) -> List[Dict[str, Any]]:
 
 def render() -> None:
     """Render the Overview landing page."""
+    if not require_permission(
+        get_current_user(), Permission.VIEW_COURSE_ANALYTICS
+    ):
+        return
     st.title("📊 Attendance Overview")
     st.caption("Real-time telemetry and system-wide verification analytics.")
 
@@ -99,6 +120,9 @@ def render() -> None:
     _schedule_auto_refresh()
     st.caption("This read-only overview refreshes automatically every 30 seconds.")
 
+    user = get_current_user()
+    role = role_for_user(user)
+
     # Filter controls in a top bar
     col_filter1, col_filter2, col_btn = st.columns([2, 2, 1])
     with col_filter1:
@@ -109,13 +133,27 @@ def render() -> None:
             index=0,
         )
     with col_filter2:
-        # Load courses for optional filter
-        ok_courses, courses_data = api_client.list_courses(token=token)
-        course_options = {"All Courses": None}
-        if ok_courses and isinstance(courses_data, dict) and "items" in courses_data:
-            for c in courses_data["items"]:
-                course_options[f"{c.get('code', '')} - {c.get('name', '')}"] = c.get("id")
-        selected_course_label = st.selectbox("Course Scope", options=list(course_options.keys()))
+        ok_courses, visible_courses, scope_message = load_visible_courses(
+            token, user
+        )
+        if not ok_courses:
+            st.error(scope_message or "Unable to load courses.")
+            return
+        course_options = {"All Courses": None} if role == "admin" else {}
+        for course in visible_courses:
+            course_id = course.get("id")
+            if isinstance(course_id, str) and course_id:
+                course_options[
+                    f"{course.get('code', '')} - {course.get('name', '')}"
+                ] = course_id
+        if not course_options:
+            st.info(scope_message or "No courses are available for this account.")
+            return
+        selected_course_label = st.selectbox(
+            "Course Scope",
+            options=list(course_options.keys()),
+            index=0,
+        )
         selected_course_id = course_options[selected_course_label]
 
     with col_btn:
@@ -190,6 +228,20 @@ def render() -> None:
         else None
         for status, (ok, response) in outcome_results.items()
     }
+    flagged_share = _flagged_share(outcome_counts)
+
+    course_summary = None
+    if selected_course_id:
+        ok_course_summary, course_summary_response = api_client.get_course_stats(
+            token, selected_course_id
+        )
+        if ok_course_summary and isinstance(course_summary_response, dict):
+            course_summary = course_summary_response
+        else:
+            st.error(
+                f"Unable to load selected-course attendance summary: "
+                f"{course_summary_response}"
+            )
     today_session_count = (
         _total_from_response(today_sessions_response)
         if ok_today_sessions
@@ -263,10 +315,23 @@ def render() -> None:
             delta=f"Avg Risk: {stats.get('average_risk_score', 0.0):.2f}",
         )
     with m5:
+        enrolled_count = (
+            course_summary.get("total_enrolled")
+            if course_summary
+            else stats.get("total_students", 0)
+        )
         st.metric(
-            label="Enrolled Students",
-            value=stats.get("total_students", 0),
-            delta=f"{stats.get('total_courses', 0)} active courses",
+            label=(
+                "Enrolled Students"
+                if selected_course_id
+                else "Active Students (all courses)"
+            ),
+            value=enrolled_count,
+            delta=(
+                "Selected course"
+                if selected_course_id
+                else f"{stats.get('total_courses', 0)} active courses"
+            ),
             delta_color="off",
         )
     with m6:
@@ -275,6 +340,48 @@ def render() -> None:
             value=flagged_count,
             delta="Pending review" if flagged_count > 0 else "All clear",
             delta_color="inverse" if flagged_count > 0 else "normal",
+        )
+
+    summary_columns = st.columns(3)
+    with summary_columns[0]:
+        attendance_rate = (
+            course_summary.get("average_attendance_rate")
+            if course_summary
+            else None
+        )
+        st.metric(
+            "Recorded Check-in Rate",
+            f"{attendance_rate * 100:.1f}%"
+            if isinstance(attendance_rate, Real)
+            and not isinstance(attendance_rate, bool)
+            else "Unavailable",
+            delta="API count includes all recorded statuses"
+            if selected_course_id
+            else "Select a course for a course-scoped rate",
+        )
+    with summary_columns[1]:
+        flagged_count_period = outcome_counts.get("flagged")
+        approved_count_period = outcome_counts.get("approved")
+        st.metric(
+            "Flagged / Approved",
+            f"{flagged_count_period} / {approved_count_period}"
+            if flagged_count_period is not None
+            and approved_count_period is not None
+            else "Unavailable",
+            delta=(
+                f"{flagged_share:.1%} flagged share"
+                if flagged_share is not None
+                else "No check-ins in selected period"
+            ),
+        )
+    with summary_columns[2]:
+        st.metric(
+            "Average Risk Score",
+            f"{stats.get('average_risk_score'):.2f}"
+            if isinstance(stats.get("average_risk_score"), Real)
+            and not isinstance(stats.get("average_risk_score"), bool)
+            else "Unavailable",
+            delta="Backend summary",
         )
 
     st.markdown("---")
