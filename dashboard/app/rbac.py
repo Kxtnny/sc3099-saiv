@@ -42,13 +42,13 @@ _INSTRUCTOR_PERMISSIONS = frozenset(
         Permission.MANAGE_SESSIONS,
         Permission.VIEW_COURSE_ANALYTICS,
         Permission.MANAGE_ENROLLMENTS,
+        Permission.VIEW_CHECKIN_EXPLORER,
     }
 )
 _ADMIN_PERMISSIONS = frozenset(
     {
         Permission.VIEW_AUDIT,
         Permission.VIEW_OBSERVABILITY,
-        Permission.VIEW_CHECKIN_EXPLORER,
         Permission.MANAGE_ADMINISTRATION,
         Permission.MANAGE_DEVICES,
     }

@@ -984,6 +984,7 @@ def render() -> None:
                     max_value=180,
                     value=15,
                     step=5,
+                    help="Applies if you use Start Session early. Otherwise the session starts at its scheduled time.",
                 )
             with window_col2:
                 checkin_closes_after = st.number_input(

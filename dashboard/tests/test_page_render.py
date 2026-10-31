@@ -106,3 +106,26 @@ def test_device_page_is_refused_to_non_admins(monkeypatch):
     assert not app.exception
     assert app.error[0].value == "Access restricted to Administrators."
     list_devices.assert_not_called()
+
+
+def _render_session_checkins():
+    from app.views import session_checkins
+
+    session_checkins.render()
+
+
+def test_assigned_ta_can_open_a_session_and_see_its_checkins(monkeypatch):
+    get_checkins = Mock(return_value=(True, []))
+    monkeypatch.setattr(
+        api_client, "list_courses", Mock(return_value=(True, {"items": [COURSE], "total": 1}))
+    )
+    monkeypatch.setattr(api_client, "get_my_sessions", Mock(return_value=(True, [SESSION])))
+    monkeypatch.setattr(api_client, "get_session_checkins", get_checkins)
+
+    app = AppTest.from_function(_render_session_checkins)
+    app.session_state["access_token"] = "access-token"
+    app.session_state["user"] = {"id": "ta-id", "role": "ta"}
+    app.run()
+
+    assert not app.exception
+    get_checkins.assert_called_once_with("access-token", "session-1")

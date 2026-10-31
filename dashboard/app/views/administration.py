@@ -69,11 +69,6 @@ def render() -> None:
     courses_ok = active_courses_ok and inactive_courses_ok
     courses = active_courses + inactive_courses
     courses_error = active_courses_error or inactive_courses_error
-    devices_ok, devices, devices_error = _load_pages(
-        lambda offset: api_client.list_devices(
-            token, limit=100, offset=offset
-        )
-    )
     valid_roles = {"student", "ta", "instructor", "admin"}
     if users_ok and any(
         not isinstance(item.get("id"), str)
@@ -95,18 +90,8 @@ def render() -> None:
     ):
         courses_ok = False
         courses_error = "The course API returned an invalid course record."
-    if devices_ok and any(
-        not isinstance(item.get("id"), str)
-        or not isinstance(item.get("user_id"), str)
-        or not isinstance(item.get("device_fingerprint"), str)
-        or not isinstance(item.get("is_active"), bool)
-        or not isinstance(item.get("is_trusted"), bool)
-        for item in devices
-    ):
-        devices_ok = False
-        devices_error = "The device API returned an invalid device record."
 
-    user_tab, course_tab, device_tab = st.tabs(["Users", "Courses", "Devices"])
+    user_tab, course_tab = st.tabs(["Users", "Courses"])
     with user_tab:
         st.subheader("User accounts")
         if not users_ok:
@@ -354,73 +339,3 @@ def render() -> None:
             st.warning(
                 "Instructor choices are unavailable because users could not be loaded."
             )
-
-    with device_tab:
-        st.subheader("Registered devices")
-        if not devices_ok:
-            st.error(f"Could not load devices: {devices_error}")
-        elif not devices:
-            st.info("No device records were returned.")
-        else:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {
-                            "Device ID": device.get("id"),
-                            "User ID": device.get("user_id"),
-                            "Name": device.get("device_name") or "",
-                            "Platform": device.get("platform") or "",
-                            "Trusted": device.get("is_trusted"),
-                            "Active": device.get("is_active"),
-                            "Last seen": device.get("last_seen_at") or "",
-                        }
-                        for device in devices
-                    ]
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-            device_options = {
-                f"{device.get('device_name') or device.get('device_fingerprint')} "
-                f"({device.get('user_id')})": device
-                for device in devices
-            }
-            selected_device_label = st.selectbox(
-                "Device to update",
-                list(device_options),
-                key="admin_device_to_update",
-            )
-            selected_device = device_options[selected_device_label]
-            with st.form("admin_device_update"):
-                trusted = st.checkbox(
-                    "Trusted",
-                    value=selected_device["is_trusted"],
-                )
-                device_active = st.checkbox(
-                    "Device active",
-                    value=selected_device["is_active"],
-                )
-                confirm_deactivation = st.checkbox(
-                    "Confirm deactivating this device",
-                    disabled=not selected_device["is_active"],
-                )
-                save_device = st.form_submit_button("Save device")
-            if save_device:
-                if (
-                    selected_device["is_active"]
-                    and not device_active
-                    and not confirm_deactivation
-                ):
-                    st.error("Confirm deactivation before saving.")
-                else:
-                    ok_update, result = api_client.update_device(
-                        token,
-                        selected_device["id"],
-                        is_active=device_active,
-                        is_trusted=trusted,
-                    )
-                    if ok_update:
-                        st.success("Device updated.")
-                        st.rerun()
-                    else:
-                        st.error(f"Could not update device: {result}")

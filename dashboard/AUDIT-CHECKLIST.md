@@ -24,10 +24,10 @@ conflicting contract prevents verification.
 | Student own history and devices; device rename/revoke actions are guarded | PASS | `app/views/student.py`, `app/api_client.py`; backend device routes enforce ownership |
 | Student check-in submission | PARTIAL | Dashboard links to the existing student portal (`app/config.py`, `app/views/student.py`); submission remains in `../frontend/components/CheckinFlow.tsx` |
 | Student appeal of an eligible own check-in | PASS | `app/views/student.py`, `app/api_client.py`; backend endpoint enforces owner, status, one-time, and seven-day checks |
-| TA session check-in and flagged-review pages | PARTIAL | Explicit TA-course assignment table/routes and admin assignment UI are implemented in `../backend/app/models/course_ta.py`, `../backend/app/routers/courses.py`, and `app/views/courses.py`. Course-scope helpers and review authorization are unit tested; live API permission behavior is not verified. |
+| TA session check-in and flagged-review pages | PASS | Explicit TA-course assignment table/routes and admin assignment UI are implemented in `../backend/app/models/course_ta.py`, `../backend/app/routers/courses.py`, and `app/views/courses.py`. Course-scope helpers and review authorization are unit tested; live API permission behavior is not verified. |
 | Instructor course/session/roster/analytics scope in dashboard and API | PARTIAL | Dashboard filters in `app/access.py`; backend scope helpers protect sessions, check-ins, stats, rosters, reviews and exports. Unit tests cover course denial/assignment and export access, but no live API integration is available. |
 | Instructor student details limited to selected course | PASS | `app/views/courses.py`; backend student stats filter to assigned/enrolled courses and reject cross-course reads |
-| Admin access to dashboard pages, including user/course/device management and TA assignments | PARTIAL | Admin-only page includes account, course, device and TA assignment actions. API behavior is wrapper/unit-tested but not live-integrated. |
+| Admin access to dashboard pages, including user/course/device management and TA assignments | PARTIAL | Admin-only pages include account, course, device (Device Trust) and TA assignment actions. API behavior is wrapper/unit-tested but not live-integrated. |
 | Backend authorization for direct API access to scoped staff data | PARTIAL | Course/session/check-in/review/stats/enrollment/export paths now enforce roles and course scope. Open role-selectable self-registration and live route integration remain unresolved; frontend checks are not security boundaries. |
 
 ## Part 2 — observability requirements
@@ -112,7 +112,8 @@ substituting mock data. No mock-data fallback was found in the audited views.
   ownership and TA assignments for backend course-scoped operations.
 - `../backend/app/models/course_ta.py` and admin-only assignment routes define
   the TA-course mapping; TA review checks the session's course assignment.
-- Enrollment roster/mutations and analytics are instructor/admin-only;
+- Enrollment changes and course analytics are instructor/admin-only, and
+  assigned TAs can read rosters and session statistics;
   sessions, check-ins, reviews, and exports are scoped to assigned course IDs.
 - `app/auth.py` and `app/views/review_queue.py` escape dynamic identity strings
   before inserting them into unsafe HTML. This protects dashboard-rendered

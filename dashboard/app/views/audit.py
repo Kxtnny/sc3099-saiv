@@ -11,7 +11,7 @@ from app.api_client import api_client
 from app.auth import get_current_user, get_token
 from app.rbac import Permission, require_permission
 from app.views._downloads import render_csv_download, render_json_download
-from app.views._time import format_singapore_time
+from app.views._time import SINGAPORE_TIMEZONE, format_singapore_time
 
 
 def _clear_audit_filters() -> None:
@@ -31,8 +31,8 @@ def _utc_date_bound(value: date, *, end: bool = False) -> str:
     bound = datetime.combine(
         value + timedelta(days=1) if end else value,
         time.min,
-        tzinfo=timezone.utc,
-    )
+        tzinfo=SINGAPORE_TIMEZONE,
+    ).astimezone(timezone.utc)
     if end:
         bound -= timedelta(microseconds=1)
     return bound.isoformat().replace("+00:00", "Z")

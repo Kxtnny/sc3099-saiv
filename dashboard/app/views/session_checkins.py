@@ -27,20 +27,13 @@ def render() -> None:
     st.caption("View attendance records for one selected session.")
 
     role = role_for_user(user)
-    if role == "ta":
-        st.warning(
-            "Session check-ins are withheld because the API does not expose "
-            "which courses are assigned to this TA."
-        )
-        return
-
-    if role == "instructor":
+    if role in {"instructor", "ta"}:
         ok_courses, courses, scope_message = load_visible_courses(token, user)
         if not ok_courses:
             st.error(scope_message or "Unable to load assigned courses.")
             return
         if not courses:
-            st.info("No courses are assigned to this instructor.")
+            st.info("No courses are assigned to your account.")
             return
         allowed_course_ids = {
             course.get("id")

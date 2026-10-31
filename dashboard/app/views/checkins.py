@@ -8,9 +8,10 @@ import pandas as pd
 import streamlit as st
 
 from app.api_client import api_client
+from app.access import load_visible_courses
 from app.auth import get_current_user, get_token
-from app.rbac import Permission, require_permission
-from app.views._time import format_singapore_time
+from app.rbac import Permission, require_permission, role_for_user
+from app.views._time import SINGAPORE_TIMEZONE, format_singapore_time
 
 # Matches MEDIUM_RISK_FLOOR in backend/app/services/risk.py.
 APPROVED_WITH_FLAG_MIN_RISK = 0.3
@@ -29,8 +30,8 @@ def _utc_date_bound(value: date, *, end: bool = False) -> str:
     bound = datetime.combine(
         value + timedelta(days=1) if end else value,
         time.min,
-        tzinfo=timezone.utc,
-    )
+        tzinfo=SINGAPORE_TIMEZONE,
+    ).astimezone(timezone.utc)
     if end:
         bound -= timedelta(microseconds=1)
     return bound.isoformat().replace("+00:00", "Z")
@@ -43,7 +44,7 @@ def render() -> None:
     ):
         return
     st.title("📋 Check-in Explorer")
-    st.caption("Search, filter, and inspect detailed multi-signal verification records across all courses.")
+    st.caption("Search, filter, and inspect detailed multi-signal verification records for your courses.")
 
     token = get_token()
     if not token:
@@ -80,20 +81,19 @@ def render() -> None:
         col_f1, col_f2, col_f3 = st.columns(3)
 
         with col_f1:
-            ok_courses, courses_data = api_client.list_courses(token=token)
-            course_map: Dict[str, Optional[str]] = {"All Courses": None}
+            user = get_current_user()
+            ok_courses, visible_courses, scope_message = load_visible_courses(token, user)
             if not ok_courses:
-                st.error(f"Unable to load course filters: {courses_data}")
-            elif (
-                not isinstance(courses_data, dict)
-                or not isinstance(courses_data.get("items"), list)
-            ):
-                st.error("Unable to load course filters: invalid response format.")
-            else:
-                for c in courses_data["items"]:
-                    if not isinstance(c, dict):
-                        continue
-                    course_map[f"{c.get('code')} - {c.get('name')}"] = c.get("id")
+                st.error(scope_message or "Unable to load course filters.")
+                return
+            course_map: Dict[str, Optional[str]] = (
+                {"All Courses": None} if role_for_user(user) == "admin" else {}
+            )
+            for c in visible_courses:
+                course_map[f"{c.get('code')} - {c.get('name')}"] = c.get("id")
+            if not course_map:
+                st.info("No courses are assigned to your account.")
+                return
             selected_course_label = st.selectbox("Course", options=list(course_map.keys()), key="ci_course")
             course_filter = course_map[selected_course_label]
 
@@ -167,13 +167,13 @@ def render() -> None:
             student_search = st.text_input("Filter by Student ID (Optional)", placeholder="UUID of student")
         with col_r3:
             start_filter = st.date_input(
-                "Checked in from (UTC)",
+                "Checked in from (SGT)",
                 value=None,
                 key="ci_start_date",
             )
         with col_r4:
             end_filter = st.date_input(
-                "Checked in through (UTC)",
+                "Checked in through (SGT)",
                 value=None,
                 key="ci_end_date",
             )

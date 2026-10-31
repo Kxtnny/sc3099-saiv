@@ -11,7 +11,8 @@ def filter_courses_for_user(
 ) -> List[Dict[str, Any]]:
     """Return only courses the dashboard can associate with this user's role."""
     role = role_for_user(user)
-    if role == "admin":
+    if role in {"admin", "ta"}:
+        # The backend already limits a TA's list to their assigned courses.
         return courses
     if role != "instructor" or not user or not isinstance(user.get("id"), str):
         return []
@@ -27,14 +28,7 @@ def load_visible_courses(
 ) -> Tuple[bool, List[Dict[str, Any]], Optional[str]]:
     """Load courses and apply the dashboard's owner scope before rendering."""
     role = role_for_user(user)
-    if role == "ta":
-        return (
-            True,
-            [],
-            "The API does not expose TA course assignments. Course-scoped staff "
-            "data is withheld until the backend provides that mapping.",
-        )
-    if role not in {"admin", "instructor"}:
+    if role not in {"admin", "instructor", "ta"}:
         return False, [], "Your role cannot access course-scoped dashboard data."
 
     all_courses: List[Dict[str, Any]] = []

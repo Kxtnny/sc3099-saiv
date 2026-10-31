@@ -14,6 +14,7 @@ def test_course_scopes_are_fail_closed_and_role_specific(monkeypatch):
         side_effect=[
             (True, {"items": [COURSES[0]], "total": 2}),
             (True, {"items": [COURSES[1]], "total": 2}),
+            (True, {"items": [COURSES[1]], "total": 1}),
         ]
     )
     monkeypatch.setattr("app.access.api_client.list_courses", list_courses)
@@ -33,11 +34,12 @@ def test_course_scopes_are_fail_closed_and_role_specific(monkeypatch):
 
     ok, courses, message = load_visible_courses("token", {"role": "ta"})
     assert ok
-    assert courses == []
-    assert "TA course assignments" in message
-    assert list_courses.call_count == 2
+    assert courses == [COURSES[1]]
+    assert message is None
+    assert list_courses.call_count == 3
 
     assert filter_courses_for_user({"role": "admin"}, COURSES) == COURSES
+    assert filter_courses_for_user({"role": "ta"}, COURSES) == COURSES
     assert filter_courses_for_user({"role": "student"}, COURSES) == []
     assert filter_courses_for_user({"role": "invalid"}, COURSES) == []
     assert filter_courses_for_user(

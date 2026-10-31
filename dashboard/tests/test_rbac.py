@@ -42,6 +42,7 @@ def test_roles_have_cumulative_permissions():
         Permission.MANAGE_SESSIONS,
         Permission.VIEW_COURSE_ANALYTICS,
         Permission.MANAGE_ENROLLMENTS,
+        Permission.VIEW_CHECKIN_EXPLORER,
     }
 
     assert ROLE_PERMISSIONS["student"] == student_permissions
@@ -58,6 +59,7 @@ def test_navigation_pages_match_the_cumulative_role_matrix():
         "📊 Overview",
         "📅 Sessions",
         "🎓 Courses & Rosters",
+        "📋 Check-in Explorer",
     }
 
     assert allowed_dashboard_pages({"role": "student"}) == student_pages

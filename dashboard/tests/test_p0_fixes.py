@@ -744,9 +744,7 @@ def test_prometheus_range_query_sends_time_range_and_step():
 
 
 def test_filter_date_helpers_include_the_full_selected_day():
-    expected = "2026-10-21T23:59:59.999999Z"
+    expected = "2026-10-21T15:59:59.999999Z"
     assert checkins._utc_date_bound(date(2026, 10, 21), end=True) == expected
     assert audit._utc_date_bound(date(2026, 10, 21), end=True) == expected
-    assert _session_utc_date_bound(date(2026, 10, 21), end=True) == (
-        "2026-10-21T15:59:59.999999Z"
-    )
+    assert _session_utc_date_bound(date(2026, 10, 21), end=True) == expected
