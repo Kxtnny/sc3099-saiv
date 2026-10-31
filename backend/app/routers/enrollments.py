@@ -2,7 +2,7 @@
 Enrollment management.
 
 Instructors may manage rosters for their assigned courses; administrators have
-system-wide access. TAs can review attendance but cannot manage enrollments.
+system-wide access. Assigned TAs can read a roster but cannot change it.
 """
 
 import logging
@@ -134,10 +134,10 @@ def course_enrollments(
     course_id: str,
     is_active: bool = True,
     search: Optional[str] = Query(default=None, max_length=255),
-    _staff: User = Depends(require_instructor),
+    _staff: User = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
-    """Roster for a course. The assigned instructor or an admin only."""
+    """Roster for a course. Its assigned staff or an admin only."""
     course = db.query(Course).filter(Course.id == course_id).first()
     if course is None:
         raise HTTPException(

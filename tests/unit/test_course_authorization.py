@@ -3,6 +3,7 @@ import csv
 import io
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 from fastapi import HTTPException
@@ -19,6 +20,7 @@ from app.routers import checkins as checkins_router
 from app.routers import courses as courses_router
 from app.routers import enrollments as enrollments_router
 from app.routers import export as export_router
+from app.routers import sessions as sessions_router
 from app.routers import stats as stats_router
 from app.schemas.course import CourseTAAssignmentCreate
 from app.schemas.enrollment import EnrollmentCreate
@@ -61,13 +63,13 @@ def _user(db: Session, role: str, suffix: str) -> User:
     return user
 
 
-def _course(db: Session, code: str, instructor: User) -> Course:
+def _course(db: Session, code: str, instructor: Optional[User]) -> Course:
     course = Course(
         id=f"course-{code}",
         code=code,
         name=f"Course {code}",
         semester="AY 2026-27 Sem 1",
-        instructor_id=instructor.id,
+        instructor_id=instructor.id if instructor else None,
     )
     db.add(course)
     db.flush()
@@ -286,7 +288,7 @@ def _export_fixture_data(db: Session):
     return instructor, other_instructor, student, course, other_course, session
 
 
-def test_course_export_is_course_scoped_and_uses_approved_attendance(
+def test_course_export_is_course_scoped(
     db, monkeypatch
 ):
     instructor, other_instructor, _, course, _, _ = _export_fixture_data(db)
@@ -344,3 +346,85 @@ async def _collect(body_iterator) -> bytes:
     async for chunk in body_iterator:
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+def test_unowned_course_is_open_to_instructors_but_not_to_tas(db):
+    owner = _user(db, UserRole.INSTRUCTOR.value, "owner")
+    other = _user(db, UserRole.INSTRUCTOR.value, "other")
+    ta = _user(db, UserRole.TA.value, "unowned")
+    owned = _course(db, "OWNED", owner)
+    unowned = _course(db, "UNOWNED", None)
+
+    assert has_course_access(db, other, unowned.id)
+    assert unowned.id in accessible_course_ids(db, other)
+    assert not has_course_access(db, other, owned.id)
+    assert owned.id not in accessible_course_ids(db, other)
+    assert not has_course_access(db, ta, unowned.id)
+
+
+def test_only_the_creator_edits_a_session_in_an_unowned_course(db):
+    creator = _user(db, UserRole.INSTRUCTOR.value, "creator")
+    other = _user(db, UserRole.INSTRUCTOR.value, "bystander")
+    unowned = _course(db, "NOOWNER", None)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    session = AttendanceSession(
+        id="session-unowned",
+        course_id=unowned.id,
+        instructor_id=creator.id,
+        name="Lecture",
+        session_type="lecture",
+        status=SessionStatus.SCHEDULED.value,
+        scheduled_start=now,
+        scheduled_end=now + timedelta(hours=1),
+        checkin_opens_at=now,
+        checkin_closes_at=now + timedelta(minutes=30),
+    )
+    db.add(session)
+    db.flush()
+
+    assert sessions_router._owns(creator, session)
+    assert not sessions_router._owns(other, session)
+
+
+def test_approved_flagged_list_is_limited_to_the_callers_courses(db):
+    owner = _user(db, UserRole.INSTRUCTOR.value, "flag-owner")
+    other = _user(db, UserRole.INSTRUCTOR.value, "flag-other")
+    student = _user(db, UserRole.STUDENT.value, "flag-student")
+    course = _course(db, "FLAGGED", owner)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    session = AttendanceSession(
+        id="session-flagged",
+        course_id=course.id,
+        instructor_id=owner.id,
+        name="Lecture",
+        session_type="lecture",
+        status=SessionStatus.ACTIVE.value,
+        scheduled_start=now,
+        scheduled_end=now + timedelta(hours=1),
+        checkin_opens_at=now,
+        checkin_closes_at=now + timedelta(minutes=30),
+    )
+    db.add(session)
+    db.add(
+        CheckIn(
+            id="checkin-flagged",
+            session_id=session.id,
+            student_id=student.id,
+            status=CheckInStatus.APPROVED.value,
+            risk_score=0.4,
+        )
+    )
+    db.flush()
+
+    def listed(user):
+        return checkins_router.approved_flagged_checkins(
+            None, None, False, 50, 0, user, db
+        )["total"]
+
+    assert listed(owner) == 1
+    assert listed(other) == 0
+    with pytest.raises(HTTPException) as denied:
+        checkins_router.approved_flagged_checkins(
+            course.id, None, False, 50, 0, other, db
+        )
+    assert denied.value.status_code == 403

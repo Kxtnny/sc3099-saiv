@@ -22,9 +22,9 @@ Authorization: Bearer <access_token>
 | `admin` | System administrators | Full access to all endpoints |
 
 Course staff reads, mutations, reviews, analytics, and exports are scoped to
-the instructor's owned courses or a TA's explicit course assignments. Admin
-access is system-wide. Students may access only their own attendance records
-and devices.
+the instructor's owned courses or a TA's explicit course assignments. A course
+with no assigned instructor stays open to any instructor. Admin access is
+system-wide. Students may access only their own attendance records and devices.
 
 ---
 
@@ -780,8 +780,6 @@ Analytics endpoints for the instructor dashboard.
 #### GET /stats/overview
 Get scoped statistics. **Requires auth (instructor/admin).** Instructors
 receive metrics only for owned courses; admins receive system-wide metrics.
-Attendance percentages count approved check-ins only; pending, flagged,
-rejected, and appealed records do not count as verified attendance.
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -815,8 +813,7 @@ rejected, and appealed records do not count as verified attendance.
 ```
 
 #### GET /stats/sessions/{session_id}
-Get statistics for a specific session. **Requires auth (instructor/admin for
-the session's course).**
+Get statistics for a specific session. **Requires auth (instructor/TA for session's course).**
 
 **Response:** `200 OK`
 ```json
@@ -1041,8 +1038,7 @@ Get current student's course enrollments. **Requires auth (student).**
 ```
 
 #### GET /enrollments/course/{course_id}
-Get all students enrolled in a course. **Requires auth (instructor/admin for
-the course).**
+Get all students enrolled in a course. **Requires auth (instructor/TA for course).**
 
 **Query Parameters:**
 | Parameter | Type | Default | Description |
@@ -1234,8 +1230,7 @@ or admin for the session's course).**
 **Response:** `200 OK` - Returns downloadable file
 
 CSV uses UTF-8 encoding, standard CSV quoting, and neutralizes spreadsheet
-formula prefixes in text cells. Exported attendance rates use approved
-check-ins divided by eligible enrollment slots.
+formula prefixes in text cells.
 
 ---
 

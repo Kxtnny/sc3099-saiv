@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.utils import to_naive_utc, utcnow
-from app.dependencies import get_current_user, require_instructor
+from app.dependencies import get_current_user, require_instructor, require_staff
 from app.enums import (
     ATTENDED_CHECKIN_STATUSES,
     CheckInStatus,
@@ -146,18 +146,6 @@ def overview(
     if scoped_course_ids is not None:
         course_query = course_query.filter(Course.id.in_(scoped_course_ids))
     total_courses = course_query.count()
-    possible_attendance = (
-        db.query(func.count(Enrollment.id))
-        .join(
-            AttendanceSession,
-            AttendanceSession.course_id == Enrollment.course_id,
-        )
-        .filter(Enrollment.is_active.is_(True))
-    )
-    if scoped_course_ids is not None:
-        possible_attendance = possible_attendance.filter(
-            AttendanceSession.course_id.in_(scoped_course_ids)
-        )
 
     return {
         "total_sessions": total_sessions,
@@ -171,12 +159,7 @@ def overview(
         "flagged_pending": flagged_pending,
         "flagged_pending_review": flagged_pending,
         "approval_rate": _rate(approved, total_checkins),
-        "average_attendance_rate": _rate(
-            checkin_query.filter(
-                CheckIn.status == CheckInStatus.APPROVED.value
-            ).count(),
-            possible_attendance.scalar() or 0,
-        ),
+        "average_attendance_rate": _rate(total_checkins, total_enrollments),
         "average_risk_score": round(float(average_risk), 4),
         "high_risk_checkins_today": high_risk_today,
         "trends": {
@@ -190,7 +173,7 @@ def overview(
 @router.get("/sessions/{session_id}")
 def session_stats(
     session_id: str,
-    _staff: User = Depends(require_instructor),
+    _staff: User = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """Attendance breakdown for a single session."""
@@ -217,7 +200,6 @@ def session_stats(
 
     counts = _status_counts(db, [session.id])
     checked_in = sum(counts.values())
-    verified_attendance = counts.get(CheckInStatus.APPROVED.value, 0)
 
     average_risk = (
         db.query(func.avg(CheckIn.risk_score))
@@ -258,7 +240,7 @@ def session_stats(
         "rejected_count": counts.get(CheckInStatus.REJECTED.value, 0),
         "pending_count": counts.get(CheckInStatus.PENDING.value, 0),
         "appealed_count": counts.get(CheckInStatus.APPEALED.value, 0),
-        "attendance_rate": _rate(verified_attendance, total_enrolled),
+        "attendance_rate": _rate(checked_in, total_enrolled),
         "average_risk_score": round(float(average_risk), 4),
         "average_distance_meters": round(float(average_distance), 2),
         "by_status": counts,
@@ -348,8 +330,8 @@ def course_stats(
         "total_enrolled": total_enrolled,
         "total_sessions": len(sessions),
         "total_checkins": total_checkins,
-        "average_attendance_rate": _rate(approved_checkins, possible),
-        "overall_attendance_rate": _rate(approved_checkins, possible),
+        "average_attendance_rate": _rate(total_checkins, possible),
+        "overall_attendance_rate": _rate(total_checkins, possible),
         "verified_attendance_count": approved_checkins,
         "flagged_checkins": flagged,
         "approved_checkins": approved_checkins,
@@ -360,9 +342,7 @@ def course_stats(
                 "date": s.scheduled_start.date().isoformat(),
                 "status": s.status,
                 "checked_in": per_session.get(s.id, 0),
-                "attendance_rate": _rate(
-                    approved_per_session.get(s.id, 0), total_enrolled
-                ),
+                "attendance_rate": _rate(per_session.get(s.id, 0), total_enrolled),
                 "approved_checkins": approved_per_session.get(s.id, 0),
             }
             for s in sessions

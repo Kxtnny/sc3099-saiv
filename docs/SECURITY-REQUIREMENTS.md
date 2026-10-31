@@ -80,7 +80,7 @@ is a known release blocker.
 | POST /checkins/ | Yes | No | No | No |
 | GET /checkins/session/{id} | No | Yes | Yes | Yes |
 | POST /sessions/ | No | No | Yes | Yes |
-| GET /enrollments/course/{id} | No | No | Owned course | Yes |
+| GET /enrollments/course/{id} | No | Assigned course | Owned course | Yes |
 | POST /enrollments/ | No | No | Owned course | Yes |
 | GET /audit/ | No | No | No | Yes |
 

@@ -181,7 +181,7 @@ def export_session(
             "approved": approved,
             "flagged": flagged,
             "attendance_rate": (
-                round(approved / total_enrolled, 4) if total_enrolled else 0.0
+                round(len(checkins) / total_enrolled, 4) if total_enrolled else 0.0
             ),
         },
         "records": records,
@@ -261,10 +261,6 @@ def export_course_attendance(
     if export_format == "csv":
         return _csv_response(records, f"attendance_{course.code}.csv")
 
-    approved = sum(
-        1 for checkin in checkins
-        if checkin.status == CheckInStatus.APPROVED.value
-    )
     possible = total_enrolled * total_sessions
     return {
         "course_id": course.id,
@@ -275,7 +271,7 @@ def export_course_attendance(
             "total_sessions": total_sessions,
             "total_checkins": len(records),
             "attendance_rate": (
-                round(approved / possible, 4) if possible else 0.0
+                round(len(records) / possible, 4) if possible else 0.0
             ),
         },
         "records": records,

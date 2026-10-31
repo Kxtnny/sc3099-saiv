@@ -78,7 +78,7 @@ Course information.
 
 Course ownership is recorded on the course and is the authoritative scope for
 instructor reads and writes. Session-level `instructor_id` records who created
-the session; it does not grant access to a course the user does not own.
+the session. It grants edit access only in a course with no assigned instructor.
 
 ---
 

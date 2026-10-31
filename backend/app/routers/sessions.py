@@ -2,8 +2,9 @@
 Session management.
 
 Sessions are the check-in windows students attend. Instructors may create,
-edit, and delete sessions only in courses they own; administrators may manage
-sessions system-wide.
+edit, and delete sessions in courses they own, and create them in courses with
+no instructor assigned, where only the session's creator can then change it.
+Administrators may manage sessions system-wide.
 """
 
 import logging
@@ -116,10 +117,14 @@ def _serialize_with_counts(
 
 
 def _owns(user: User, session: AttendanceSession) -> bool:
-    """Admins and the course's currently assigned instructor may edit."""
+    """Admins, the course's instructor, or in an unowned course the creator."""
     if user.role == UserRole.ADMIN.value:
         return True
-    return session.course is not None and session.course.instructor_id == user.id
+    if session.course is None:
+        return False
+    if session.course.instructor_id is None:
+        return session.instructor_id == user.id
+    return session.course.instructor_id == user.id
 
 
 @router.get("/", response_model=PaginatedResponse[SessionResponse])

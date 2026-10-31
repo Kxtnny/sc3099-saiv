@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Query as OrmQuery, Session, joinedload
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -207,6 +207,39 @@ def _outside_singapore_reason(
     ):
         return "gps_outside_singapore"
     return None
+
+
+def _scope_to_staff(
+    db: Session,
+    staff: User,
+    query: OrmQuery,
+    course_id: Optional[str],
+    session_id: Optional[str],
+) -> OrmQuery:
+    """Limit a check-in list to what this staff member may see, and any filters."""
+    if session_id:
+        session = (
+            db.query(AttendanceSession)
+            .filter(AttendanceSession.id == session_id)
+            .first()
+        )
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            )
+        require_session_access(db, staff, session)
+        query = query.filter(CheckIn.session_id == session_id)
+    if course_id:
+        require_course_access(db, staff, course_id)
+        return query.join(
+            AttendanceSession, AttendanceSession.id == CheckIn.session_id
+        ).filter(AttendanceSession.course_id == course_id)
+    if staff.role != UserRole.ADMIN.value:
+        return query.join(
+            AttendanceSession, AttendanceSession.id == CheckIn.session_id
+        ).filter(AttendanceSession.course_id.in_(accessible_course_ids(db, staff)))
+    return query
 
 
 def _can_review(user: User, checkin: CheckIn, db: Session) -> bool:
@@ -772,32 +805,7 @@ def flagged_checkins(
         )
     )
 
-    if session_id:
-        session = (
-            db.query(AttendanceSession)
-            .filter(AttendanceSession.id == session_id)
-            .first()
-        )
-        if session is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found",
-            )
-        require_session_access(db, _staff, session)
-        query = query.filter(CheckIn.session_id == session_id)
-    if course_id:
-        require_course_access(db, _staff, course_id)
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(AttendanceSession.course_id == course_id)
-    elif _staff.role != UserRole.ADMIN.value:
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(
-            AttendanceSession.course_id.in_(
-                accessible_course_ids(db, _staff)
-            )
-        )
+    query = _scope_to_staff(db, _staff, query, course_id, session_id)
 
     total = query.count()
     rows = (
@@ -841,12 +849,7 @@ def approved_flagged_checkins(
 
     if not include_acknowledged:
         query = query.filter(CheckIn.reviewed_at.is_(None))
-    if session_id:
-        query = query.filter(CheckIn.session_id == session_id)
-    if course_id:
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(AttendanceSession.course_id == course_id)
+    query = _scope_to_staff(db, _staff, query, course_id, session_id)
 
     total = query.count()
     rows = (
@@ -914,19 +917,7 @@ def list_checkins(
         joinedload(CheckIn.device),
     )
 
-    if session_id:
-        session = (
-            db.query(AttendanceSession)
-            .filter(AttendanceSession.id == session_id)
-            .first()
-        )
-        if session is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found",
-            )
-        require_session_access(db, _staff, session)
-        query = query.filter(CheckIn.session_id == session_id)
+    query = _scope_to_staff(db, _staff, query, course_id, session_id)
     if student_id:
         query = query.filter(CheckIn.student_id == student_id)
     if status_filter is not None:
@@ -939,19 +930,6 @@ def list_checkins(
         query = query.filter(CheckIn.checked_in_at >= start_date)
     if end_date:
         query = query.filter(CheckIn.checked_in_at <= end_date)
-    if course_id:
-        require_course_access(db, _staff, course_id)
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(AttendanceSession.course_id == course_id)
-    elif _staff.role != UserRole.ADMIN.value:
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(
-            AttendanceSession.course_id.in_(
-                accessible_course_ids(db, _staff)
-            )
-        )
 
     total = query.count()
     rows = (

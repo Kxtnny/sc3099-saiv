@@ -1,8 +1,15 @@
-"""Course and resource authorization shared by API routers."""
+"""
+Course and resource authorization shared by API routers.
+
+Instructors reach the courses they own, plus any course with no instructor
+assigned. Courses are created centrally and the instructor link is optional, so
+requiring ownership there would leave nobody able to run the course.
+"""
 
 from typing import List
 
 from fastapi import HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.enums import UserRole
@@ -17,7 +24,9 @@ def accessible_course_ids(db: Session, user: User) -> List[str]:
         return [
             course_id
             for (course_id,) in db.query(Course.id)
-            .filter(Course.instructor_id == user.id)
+            .filter(
+                or_(Course.instructor_id == user.id, Course.instructor_id.is_(None))
+            )
             .all()
         ]
     if user.role == UserRole.TA.value:
@@ -38,7 +47,10 @@ def has_course_access(db: Session, user: User, course_id: str) -> bool:
     if user.role == UserRole.INSTRUCTOR.value:
         return (
             db.query(Course.id)
-            .filter(Course.id == course_id, Course.instructor_id == user.id)
+            .filter(
+                Course.id == course_id,
+                or_(Course.instructor_id == user.id, Course.instructor_id.is_(None)),
+            )
             .first()
             is not None
         )
