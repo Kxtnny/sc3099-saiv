@@ -22,6 +22,10 @@ import httpx
 
 PASSWORD = "demopass123"
 COURSE_CODE = "SC3099"
+DEMO_USER_AGENT = (
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36"
+)
 
 # NTU LT26, where the labs actually run.
 VENUE = {
@@ -43,7 +47,8 @@ def iso(dt):
 class Seeder:
     def __init__(self, base_url: str):
         self.api = base_url.rstrip("/") + "/api/v1"
-        self.http = httpx.Client(timeout=60.0)
+        # Device names come from the User-Agent, so look like a student's phone.
+        self.http = httpx.Client(timeout=60.0, headers={"User-Agent": DEMO_USER_AGENT})
 
     def close(self):
         self.http.close()

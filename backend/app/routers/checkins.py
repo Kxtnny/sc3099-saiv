@@ -391,9 +391,9 @@ def create_checkin(
                 current_user,
                 DeviceCreate(
                     device_fingerprint=payload.device_fingerprint,
-                    device_name="Auto-registered at check-in",
                     platform="web",
                 ),
+                get_user_agent(request),
             )
             assessment.add(SignalType.DEVICE_UNKNOWN)
         elif device.user_id != current_user.id:

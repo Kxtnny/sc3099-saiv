@@ -19,6 +19,7 @@ from app.config import (
     PROMETHEUS_URL,
 )
 from app.rbac import Permission, require_permission
+from app.views._navigation import open_page
 
 
 P95_LATENCY_QUERY = (
@@ -203,9 +204,12 @@ def render() -> None:
                 st.warning(
                     f"{pending_count} flagged or appealed check-in(s) are awaiting review."
                 )
-                if st.button("Open pending review queue", key="observability_review_queue"):
-                    st.session_state["dashboard_page"] = "🚨 Review Queue"
-                    st.rerun()
+                st.button(
+                    "Open pending review queue",
+                    key="observability_review_queue",
+                    on_click=open_page,
+                    args=("🚨 Review Queue",),
+                )
         else:
             st.error("The backend returned an invalid review-queue summary.")
 

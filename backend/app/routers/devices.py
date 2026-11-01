@@ -7,7 +7,7 @@ accounts suggests a proxy sign-in.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func
@@ -22,15 +22,49 @@ from app.models import Device, User
 from app.schemas.common import PaginatedResponse
 from app.schemas.device import DeviceCreate, DeviceResponse, DeviceUpdate
 from app.services import device_trust
-from app.services.audit import log_action
+from app.services.audit import get_user_agent, log_action
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
+# User-Agent markers, in the order to test them: Edge and Opera also say Chrome,
+# Chrome also says Safari, and Android also says Linux.
+BROWSERS = (
+    ("Edg", "Edge"),
+    ("OPR", "Opera"),
+    ("CriOS", "Chrome"),
+    ("Chrome", "Chrome"),
+    ("FxiOS", "Firefox"),
+    ("Firefox", "Firefox"),
+    ("Safari", "Safari"),
+)
+SYSTEMS = (
+    ("iPhone", "iPhone"),
+    ("iPad", "iPad"),
+    ("Android", "Android"),
+    ("Windows", "Windows"),
+    ("Mac OS X", "macOS"),
+    ("CrOS", "ChromeOS"),
+    ("Linux", "Linux"),
+)
+
+
+def describe_user_agent(user_agent: Optional[str]) -> Tuple[Optional[str], str]:
+    """Work out a device's browser and a readable name from its User-Agent."""
+    agent = user_agent or ""
+    browser = next((name for token, name in BROWSERS if token in agent), None)
+    system = next((name for token, name in SYSTEMS if token in agent), None)
+    if browser and system:
+        return browser, f"{browser} on {system}"
+    return browser, browser or system or "Unknown device"
+
 
 def register_device(
-    db: Session, user: User, payload: DeviceCreate
+    db: Session,
+    user: User,
+    payload: DeviceCreate,
+    user_agent: Optional[str] = None,
 ) -> Device:
     """
     Register or refresh a device for a user.
@@ -64,14 +98,13 @@ def register_device(
         db.flush()
         return existing
 
+    browser, described_name = describe_user_agent(user_agent)
     device = Device(
         user_id=user.id,
         device_fingerprint=payload.device_fingerprint,
-        device_name=(
-            sanitize_text(payload.device_name) if payload.device_name else None
-        ),
+        device_name=sanitize_text(payload.device_name or described_name),
         platform=payload.platform,
-        browser=payload.browser,
+        browser=payload.browser or browser,
         os_version=payload.os_version,
         app_version=payload.app_version,
         public_key=payload.public_key,
@@ -151,7 +184,7 @@ def create_device(
     Exposed at both /devices/ and /devices/register: the API specification
     documents the latter, while REST convention expects the former.
     """
-    device = register_device(db, current_user, payload)
+    device = register_device(db, current_user, payload, get_user_agent(request))
     log_action(
         db,
         AuditAction.DEVICE_REGISTERED,

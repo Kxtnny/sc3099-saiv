@@ -83,7 +83,7 @@ def render() -> None:
                                 {
                                     "Name": assignment.get("ta_name") or "Unknown",
                                     "Email": assignment.get("ta_email") or "Unknown",
-                                    "Assigned at": assignment.get("assigned_at") or "",
+                                    "Assigned at": format_singapore_time(assignment.get("assigned_at")),
                                 }
                                 for assignment in assignments
                                 if isinstance(assignment, dict)

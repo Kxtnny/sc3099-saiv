@@ -98,7 +98,6 @@ export async function ensureDeviceRegistered(): Promise<string> {
   try {
     const { data } = await api.post('/devices/register', {
       device_fingerprint: fingerprint,
-      device_name: `${navigator.platform || 'Browser'} device`,
       platform,
       public_key: publicKeyPem,
     });

@@ -137,7 +137,7 @@ def render() -> None:
         with st.expander(f"{device_name} · {active_status}"):
             st.caption(
                 f"Platform: {device.get('platform') or 'N/A'} · "
-                f"Last seen: {device.get('last_seen_at') or 'N/A'} · "
+                f"Last seen: {format_singapore_time(device.get('last_seen_at'))} · "
                 f"Check-ins: {device.get('total_checkins', 0)}"
             )
             if not device.get("is_active"):

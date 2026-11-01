@@ -17,6 +17,7 @@ from app.auth import get_current_user, get_token
 from app.access import load_visible_courses
 from app.rbac import Permission, require_permission, role_for_user
 from app.views._time import SINGAPORE_TIMEZONE, format_singapore_time
+from app.views._navigation import open_page
 
 
 CHECKIN_STATUSES = ("approved", "flagged", "appealed", "rejected", "pending")
@@ -255,9 +256,12 @@ def render() -> None:
             f"check-in(s) awaiting a decision. Please navigate to the **Review Queue** to take action.",
             icon="⚠️",
         )
-        if st.button("Open flagged review queue", type="primary"):
-            st.session_state["dashboard_page"] = "🚨 Review Queue"
-            st.rerun()
+        st.button(
+            "Open flagged review queue",
+            type="primary",
+            on_click=open_page,
+            args=("🚨 Review Queue",),
+        )
 
     # -------------------------------------------------------------------------
     # Key Metric Cards
@@ -564,12 +568,12 @@ def render() -> None:
                     options=list(recent_options.keys()),
                     key="overview_recent_checkin",
                 )
-                if st.button("Open selected check-in", key="overview_inspect_checkin"):
-                    st.session_state["checkin_target_id"] = recent_options[
-                        selected_recent
-                    ]
-                    st.session_state["dashboard_page"] = "📋 Check-in Explorer"
-                    st.rerun()
+                st.button(
+                    "Open selected check-in",
+                    key="overview_inspect_checkin",
+                    on_click=open_page,
+                    args=("📋 Check-in Explorer", recent_options[selected_recent]),
+                )
         else:
             st.caption("No recent check-ins found.")
     else:

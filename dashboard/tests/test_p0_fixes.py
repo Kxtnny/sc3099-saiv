@@ -1,5 +1,6 @@
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from datetime import date, datetime, time, timezone
 from unittest.mock import Mock
 
@@ -19,7 +20,7 @@ from app.views import _downloads
 from app.views.administration import _load_pages
 from app.views import audit, checkins
 from app.views import observability
-from app.views import overview
+from app.views import _navigation, observability, overview
 from app.views._time import format_singapore_time
 from app.views.review_queue import _factor_score
 from app.views.sessions import (
@@ -748,3 +749,20 @@ def test_filter_date_helpers_include_the_full_selected_day():
     assert checkins._utc_date_bound(date(2026, 10, 21), end=True) == expected
     assert audit._utc_date_bound(date(2026, 10, 21), end=True) == expected
     assert _session_utc_date_bound(date(2026, 10, 21), end=True) == expected
+
+
+def test_page_shortcut_buttons_are_set_up_before_the_sidebar_is_drawn():
+    assert "dashboard_page\"] =" not in Path(overview.__file__).read_text(encoding="utf-8")
+    assert "dashboard_page\"] =" not in Path(observability.__file__).read_text(encoding="utf-8")
+
+
+def test_open_page_selects_the_page_and_check_in(monkeypatch):
+    state = {}
+    monkeypatch.setattr(_navigation.st, "session_state", state)
+
+    _navigation.open_page("📋 Check-in Explorer", "checkin-1")
+
+    assert state == {
+        "dashboard_page": "📋 Check-in Explorer",
+        "checkin_target_id": "checkin-1",
+    }

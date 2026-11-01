@@ -18,6 +18,7 @@ from app.enums import CheckInStatus, SessionStatus, UserRole
 from app.models import AttendanceSession, CheckIn, Course, CourseTA, Enrollment, User
 from app.routers import checkins as checkins_router
 from app.routers import courses as courses_router
+from app.routers import devices as devices_router
 from app.routers import enrollments as enrollments_router
 from app.routers import export as export_router
 from app.routers import sessions as sessions_router
@@ -428,3 +429,34 @@ def test_approved_flagged_list_is_limited_to_the_callers_courses(db):
             course.id, None, False, 50, 0, other, db
         )
     assert denied.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("user_agent", "expected"),
+    [
+        (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+            ("Chrome", "Chrome on Windows"),
+        ),
+        (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 Edg/126.0",
+            ("Edge", "Edge on Windows"),
+        ),
+        (
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
+            ("Chrome", "Chrome on Android"),
+        ),
+        (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/604.1",
+            ("Safari", "Safari on iPhone"),
+        ),
+        ("python-httpx/0.28", (None, "Unknown device")),
+        (None, (None, "Unknown device")),
+    ],
+)
+def test_device_name_comes_from_the_user_agent(user_agent, expected):
+    assert devices_router.describe_user_agent(user_agent) == expected

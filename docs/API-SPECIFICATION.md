@@ -943,6 +943,8 @@ A device earns trust from its owner's clean check-ins: approved with a risk scor
 | 1-2 | 0.075 |
 | 3 or more | 0 (the device becomes `is_trusted: true`, `trust_score: "high"`) |
 
+A device registered without a `device_name` is named from its User-Agent, such as `Chrome on Windows`.
+
 Removing trust or revoking a device restarts its count from that moment. Re-registering a revoked device does not reactivate it; only an admin can, through `PATCH /devices/{device_id}`.
 
 #### POST /devices/register
