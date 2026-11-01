@@ -10,9 +10,9 @@ class Config:
     SIMHASH_BITS = 256
     SIMHASH_SEED = 0x5A17
     
-    # 0.78 in SimHash space roughly corresponds to an ArcFace cosine similarity 
-    # of ~0.60, which is the correct 1:1 verification threshold.
-    FACE_MATCH_THRESHOLD = 0.78
+    # SimHash similarity estimates 1 - angle/pi, so 0.70 is an ArcFace cosine
+    # of about 0.59. API-SPECIFICATION.md fixes match_passed at >= 0.70.
+    FACE_MATCH_THRESHOLD = 0.70
 
     ARCFACE_MODEL_PACK = "buffalo_l"
     ARCFACE_MODEL_ROOT = os.getenv("INSIGHTFACE_ROOT", "~/.insightface")
