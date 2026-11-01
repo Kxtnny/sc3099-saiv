@@ -22,6 +22,10 @@ class Config:
     # photos can fool MediaPipe's 3D estimation. Specular, frequency, and gamut 
     # are the real anti-spoofs.
     LIVENESS_THRESHOLD = 0.80
+    # A recorded challenge must also show the requested action, so its image
+    # score only has to rule out a poor capture. Live webcam frames score
+    # about 0.79-0.81 with the action bonus, too close to the 0.80 above.
+    LIVENESS_SEQUENCE_THRESHOLD = 0.70
     LIVENESS_DEPTH_WEIGHT = 0.10
     LIVENESS_MESH_WEIGHT = 0.10
     LIVENESS_TEXTURE_WEIGHT = 0.20

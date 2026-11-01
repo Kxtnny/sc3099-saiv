@@ -115,6 +115,7 @@ class LivenessDetector:
 
         bonus = (Config.PASSIVE_BLINK_BONUS if challenge == "passive" else Config.ACTIVE_CHALLENGE_BONUS) if detected else 0.0
         score = min(1.0, base + bonus)
+        threshold = Config.LIVENESS_THRESHOLD if challenge == "passive" else Config.LIVENESS_SEQUENCE_THRESHOLD
         rep_index = face_indices[0]
         
         details = LivenessDetector._details(frames[rep_index], per_frame[rep_index], challenge, detected)
@@ -122,7 +123,7 @@ class LivenessDetector:
 
         return {
             "liveness_score": round(score, 4),
-            "liveness_passed": LivenessDetector._passes(score, challenge, detected),
+            "liveness_passed": LivenessDetector._passes(score, challenge, detected, threshold),
             "challenge_type": challenge,
             "details": details,
         }
@@ -165,9 +166,9 @@ class LivenessDetector:
         return min_ear < Config.BLINK_EAR_THRESHOLD, {"min_ear": round(min_ear, 4)}
 
     @staticmethod
-    def _passes(score: float, challenge: str, action_detected: bool) -> bool:
+    def _passes(score: float, challenge: str, action_detected: bool, threshold: float = Config.LIVENESS_THRESHOLD) -> bool:
         if challenge != "passive" and not action_detected: return False
-        return score >= Config.LIVENESS_THRESHOLD
+        return score >= threshold
 
     @staticmethod
     def _details(image: np.ndarray, metrics: Dict[str, Any], challenge: str, action_detected: bool) -> Dict[str, Any]:
