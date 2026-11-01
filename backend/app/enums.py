@@ -152,3 +152,5 @@ class AuditAction(StrEnum):
     DEVICE_TRUST_CHANGED = "device_trust_changed"
     DATA_PURGED = "data_purged"
     QR_GENERATED = "qr_generated"
+    COURSE_TA_ASSIGNED = "course_ta_assigned"
+    COURSE_TA_REMOVED = "course_ta_removed"

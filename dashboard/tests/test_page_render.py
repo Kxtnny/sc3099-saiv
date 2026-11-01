@@ -31,14 +31,8 @@ def _render_sessions():
     sessions.render()
 
 
-@pytest.mark.parametrize(
-    "user",
-    [
-        {"id": "instructor-id", "role": "instructor"},
-        {"id": "ta-id", "role": "ta"},
-    ],
-)
-def test_sessions_page_renders_session_panels_without_errors(monkeypatch, user):
+def test_sessions_page_renders_session_panels_without_errors(monkeypatch):
+    user = {"id": "instructor-id", "role": "instructor"}
     monkeypatch.setattr(
         api_client, "list_courses", Mock(return_value=(True, {"items": [COURSE], "total": 1}))
     )
@@ -112,3 +106,153 @@ def test_device_page_is_refused_to_non_admins(monkeypatch):
     assert not app.exception
     assert app.error[0].value == "Access restricted to Administrators."
     list_devices.assert_not_called()
+
+
+def _render_session_checkins():
+    from app.views import session_checkins
+
+    session_checkins.render()
+
+
+def test_assigned_ta_can_open_a_session_and_see_its_checkins(monkeypatch):
+    get_checkins = Mock(return_value=(True, []))
+    monkeypatch.setattr(
+        api_client, "list_courses", Mock(return_value=(True, {"items": [COURSE], "total": 1}))
+    )
+    monkeypatch.setattr(api_client, "get_my_sessions", Mock(return_value=(True, [SESSION])))
+    monkeypatch.setattr(api_client, "get_session_checkins", get_checkins)
+
+    app = AppTest.from_function(_render_session_checkins)
+    app.session_state["access_token"] = "access-token"
+    app.session_state["user"] = {"id": "ta-id", "role": "ta"}
+    app.run()
+
+    assert not app.exception
+    get_checkins.assert_called_once_with("access-token", "session-1")
+
+
+ADMIN_USERS = [
+    {
+        "id": "admin-id",
+        "email": "admin@example.com",
+        "full_name": "Admin",
+        "role": "admin",
+        "is_active": True,
+    },
+    {
+        "id": "instructor-a",
+        "email": "a@example.com",
+        "full_name": "Instructor A",
+        "role": "instructor",
+        "is_active": True,
+    },
+    {
+        "id": "instructor-b",
+        "email": "b@example.com",
+        "full_name": "Instructor B",
+        "role": "instructor",
+        "is_active": True,
+    },
+]
+LABEL_A = "Instructor A (a@example.com)"
+LABEL_B = "Instructor B (b@example.com)"
+
+
+def _render_administration():
+    from app.views import administration
+
+    administration.render()
+
+
+def _open_course_form(monkeypatch, instructor_id, users_ok=True, instructor_name=None):
+    course = {
+        "id": "course-1",
+        "code": "CS1001",
+        "name": "Intro",
+        "semester": "AY1",
+        "is_active": True,
+        "instructor_id": instructor_id,
+        "instructor_name": instructor_name,
+    }
+    monkeypatch.setattr(
+        api_client,
+        "list_users",
+        Mock(
+            return_value=(True, {"items": ADMIN_USERS, "total": 3})
+            if users_ok
+            else (False, "unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        api_client,
+        "list_courses",
+        lambda token, is_active, limit, offset: (
+            True,
+            {"items": [course] if is_active else [], "total": 1 if is_active else 0},
+        ),
+    )
+    update_course = Mock(return_value=(True, {}))
+    monkeypatch.setattr(api_client, "update_course", update_course)
+    # AppTest keeps the submit button pressed, so a real rerun would save forever.
+    monkeypatch.setattr("streamlit.rerun", Mock())
+
+    app = AppTest.from_function(_render_administration)
+    app.session_state["access_token"] = "access-token"
+    app.session_state["user"] = {"id": "admin-id", "role": "admin"}
+    app.run()
+    assert not app.exception
+    return app, update_course
+
+
+def _save_course(app):
+    next(button for button in app.button if button.label == "Save course").click().run()
+
+
+@pytest.mark.parametrize(
+    ("current", "chosen", "expected"),
+    [
+        (None, LABEL_A, "instructor-a"),
+        ("instructor-a", LABEL_B, "instructor-b"),
+        ("instructor-a", "Unassigned", None),
+    ],
+)
+def test_admin_can_change_a_courses_instructor(monkeypatch, current, chosen, expected):
+    app, update_course = _open_course_form(monkeypatch, current)
+
+    app.selectbox(key="admin_course_instructor_course-1").set_value(chosen)
+    _save_course(app)
+
+    assert not app.exception
+    assert update_course.call_args.args[2]["instructor_id"] == expected
+
+
+def test_saving_a_course_leaves_an_unchanged_instructor_alone(monkeypatch):
+    app, update_course = _open_course_form(monkeypatch, "instructor-a")
+
+    assert app.selectbox(key="admin_course_instructor_course-1").value == LABEL_A
+    _save_course(app)
+
+    assert "instructor_id" not in update_course.call_args.args[2]
+
+
+def test_failed_user_list_cannot_unassign_a_course(monkeypatch):
+    app, update_course = _open_course_form(monkeypatch, "instructor-a", users_ok=False)
+
+    assert "admin_course_instructor_course-1" not in [box.key for box in app.selectbox]
+    _save_course(app)
+
+    assert "instructor_id" not in update_course.call_args.args[2]
+
+
+def test_unlisted_current_instructor_stays_selected(monkeypatch):
+    app, update_course = _open_course_form(
+        monkeypatch, "instructor-left", instructor_name="Former Instructor"
+    )
+
+    assert (
+        app.selectbox(key="admin_course_instructor_course-1").value
+        == "Former Instructor (current)"
+    )
+    _save_course(app)
+
+    assert "instructor_id" not in update_course.call_args.args[2]

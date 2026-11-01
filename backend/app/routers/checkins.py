@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Query as OrmQuery, Session, joinedload
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -46,6 +46,12 @@ from app.models import (
     Enrollment,
     RiskSignal,
     User,
+)
+from app.services.authorization import (
+    accessible_course_ids,
+    has_course_access,
+    require_course_access,
+    require_session_access,
 )
 from app.schemas.checkin import (
     CheckInAppeal,
@@ -203,11 +209,44 @@ def _outside_singapore_reason(
     return None
 
 
-def _can_review(user: User, checkin: CheckIn) -> bool:
-    """Course staff may review; students never can."""
-    if user.role == UserRole.ADMIN.value:
-        return True
-    return is_staff(user)
+def _scope_to_staff(
+    db: Session,
+    staff: User,
+    query: OrmQuery,
+    course_id: Optional[str],
+    session_id: Optional[str],
+) -> OrmQuery:
+    """Limit a check-in list to what this staff member may see, and any filters."""
+    if session_id:
+        session = (
+            db.query(AttendanceSession)
+            .filter(AttendanceSession.id == session_id)
+            .first()
+        )
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found",
+            )
+        require_session_access(db, staff, session)
+        query = query.filter(CheckIn.session_id == session_id)
+    if course_id:
+        require_course_access(db, staff, course_id)
+        return query.join(
+            AttendanceSession, AttendanceSession.id == CheckIn.session_id
+        ).filter(AttendanceSession.course_id == course_id)
+    if staff.role != UserRole.ADMIN.value:
+        return query.join(
+            AttendanceSession, AttendanceSession.id == CheckIn.session_id
+        ).filter(AttendanceSession.course_id.in_(accessible_course_ids(db, staff)))
+    return query
+
+
+def _can_review(user: User, checkin: CheckIn, db: Session) -> bool:
+    """Only course-assigned instructors/TAs or an admin may review."""
+    return is_staff(user) and has_course_access(
+        db, user, checkin.session.course_id
+    )
 
 
 # =============================================================================
@@ -766,12 +805,7 @@ def flagged_checkins(
         )
     )
 
-    if session_id:
-        query = query.filter(CheckIn.session_id == session_id)
-    if course_id:
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(AttendanceSession.course_id == course_id)
+    query = _scope_to_staff(db, _staff, query, course_id, session_id)
 
     total = query.count()
     rows = (
@@ -815,12 +849,7 @@ def approved_flagged_checkins(
 
     if not include_acknowledged:
         query = query.filter(CheckIn.reviewed_at.is_(None))
-    if session_id:
-        query = query.filter(CheckIn.session_id == session_id)
-    if course_id:
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(AttendanceSession.course_id == course_id)
+    query = _scope_to_staff(db, _staff, query, course_id, session_id)
 
     total = query.count()
     rows = (
@@ -848,6 +877,7 @@ def session_checkins(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Session not found"
         )
+    require_session_access(db, _staff, session)
 
     # Eager loading keeps this to a constant number of queries regardless of
     # how many students checked in.
@@ -887,8 +917,7 @@ def list_checkins(
         joinedload(CheckIn.device),
     )
 
-    if session_id:
-        query = query.filter(CheckIn.session_id == session_id)
+    query = _scope_to_staff(db, _staff, query, course_id, session_id)
     if student_id:
         query = query.filter(CheckIn.student_id == student_id)
     if status_filter is not None:
@@ -901,10 +930,6 @@ def list_checkins(
         query = query.filter(CheckIn.checked_in_at >= start_date)
     if end_date:
         query = query.filter(CheckIn.checked_in_at <= end_date)
-    if course_id:
-        query = query.join(
-            AttendanceSession, AttendanceSession.id == CheckIn.session_id
-        ).filter(AttendanceSession.course_id == course_id)
 
     total = query.count()
     rows = (
@@ -922,7 +947,10 @@ def get_checkin(
     """One check-in with its full risk breakdown. Owner or course staff."""
     checkin = (
         db.query(CheckIn)
-        .options(joinedload(CheckIn.device))
+        .options(
+            joinedload(CheckIn.device),
+            joinedload(CheckIn.session).joinedload(AttendanceSession.course),
+        )
         .filter(CheckIn.id == checkin_id)
         .first()
     )
@@ -931,10 +959,13 @@ def get_checkin(
             status_code=status.HTTP_404_NOT_FOUND, detail="Check-in not found"
         )
 
-    if checkin.student_id != current_user.id and not is_staff(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
-        )
+    if checkin.student_id != current_user.id:
+        if not is_staff(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
+        require_session_access(db, current_user, checkin.session)
 
     return _to_response(checkin)
 
@@ -1028,7 +1059,7 @@ def review_checkin(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Check-in not found"
         )
-    if not _can_review(reviewer, checkin):
+    if not _can_review(reviewer, checkin, db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
         )

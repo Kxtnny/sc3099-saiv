@@ -2,13 +2,16 @@
 Check-in Explorer View - Comprehensive search, filtering, and audit inspection of all attendance records.
 """
 
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
 from app.api_client import api_client
-from app.auth import get_token
-from app.views._time import format_singapore_time
+from app.access import load_visible_courses
+from app.auth import get_current_user, get_token
+from app.rbac import Permission, require_permission, role_for_user
+from app.views._time import SINGAPORE_TIMEZONE, format_singapore_time
 
 # Matches MEDIUM_RISK_FLOOR in backend/app/services/risk.py.
 APPROVED_WITH_FLAG_MIN_RISK = 0.3
@@ -23,15 +26,53 @@ def _status_label(checkin: Dict[str, Any]) -> str:
     return label
 
 
+def _utc_date_bound(value: date, *, end: bool = False) -> str:
+    bound = datetime.combine(
+        value + timedelta(days=1) if end else value,
+        time.min,
+        tzinfo=SINGAPORE_TIMEZONE,
+    ).astimezone(timezone.utc)
+    if end:
+        bound -= timedelta(microseconds=1)
+    return bound.isoformat().replace("+00:00", "Z")
+
+
 def render() -> None:
     """Render Check-in Explorer view."""
+    if not require_permission(
+        get_current_user(), Permission.VIEW_CHECKIN_EXPLORER
+    ):
+        return
     st.title("📋 Check-in Explorer")
-    st.caption("Search, filter, and inspect detailed multi-signal verification records across all courses.")
+    st.caption("Search, filter, and inspect detailed multi-signal verification records for your courses.")
 
     token = get_token()
     if not token:
         st.warning("Please sign in to view check-ins.")
         return
+
+    target_checkin_id = st.session_state.get("checkin_target_id")
+    if isinstance(target_checkin_id, str) and target_checkin_id:
+        st.subheader("Selected recent check-in")
+        with st.spinner("Loading selected check-in details..."):
+            ok_target, target_data = api_client.get_checkin(
+                token, target_checkin_id
+            )
+        if not ok_target:
+            st.error(f"Unable to load selected check-in: {target_data}")
+        elif isinstance(target_data, dict):
+            with st.container(border=True):
+                st.write(
+                    f"**{target_data.get('student_name') or target_data.get('student_id', 'Student')}** · "
+                    f"{str(target_data.get('status') or 'Unknown').upper()} · "
+                    f"Risk {target_data.get('risk_score', 'N/A')}"
+                )
+                st.json(target_data)
+        else:
+            st.error("Unable to load selected check-in: invalid response format.")
+        if st.button("Dismiss selected check-in", key="dismiss_target_checkin"):
+            st.session_state.pop("checkin_target_id", None)
+            st.rerun()
 
     # -------------------------------------------------------------------------
     # Filters Bar
@@ -40,11 +81,19 @@ def render() -> None:
         col_f1, col_f2, col_f3 = st.columns(3)
 
         with col_f1:
-            ok_courses, courses_data = api_client.list_courses(token=token)
-            course_map: Dict[str, Optional[str]] = {"All Courses": None}
-            if ok_courses and isinstance(courses_data, dict) and "items" in courses_data:
-                for c in courses_data["items"]:
-                    course_map[f"{c.get('code')} - {c.get('name')}"] = c.get("id")
+            user = get_current_user()
+            ok_courses, visible_courses, scope_message = load_visible_courses(token, user)
+            if not ok_courses:
+                st.error(scope_message or "Unable to load course filters.")
+                return
+            course_map: Dict[str, Optional[str]] = (
+                {"All Courses": None} if role_for_user(user) == "admin" else {}
+            )
+            for c in visible_courses:
+                course_map[f"{c.get('code')} - {c.get('name')}"] = c.get("id")
+            if not course_map:
+                st.info("No courses are assigned to your account.")
+                return
             selected_course_label = st.selectbox("Course", options=list(course_map.keys()), key="ci_course")
             course_filter = course_map[selected_course_label]
 
@@ -74,7 +123,37 @@ def render() -> None:
         with col_f3:
             page_limit = st.selectbox("Records per Page", options=[25, 50, 100], index=1)
 
-        col_r1, col_r2 = st.columns(2)
+        session_options: Dict[str, Optional[str]] = {"All Sessions": None}
+        ok_sessions, session_response = api_client.list_sessions(
+            token=token,
+            course_id=course_filter,
+            limit=100,
+        )
+        if ok_sessions and isinstance(session_response, dict):
+            session_items = session_response.get("items")
+            if not isinstance(session_items, list):
+                st.error("Unable to load sessions for filtering: invalid response format.")
+                session_items = []
+            for session in session_items:
+                if not isinstance(session, dict):
+                    continue
+                label = (
+                    f"{session.get('name', 'Session')} · "
+                    f"{session.get('scheduled_start', '')[:10]}"
+                )
+                session_options[label] = session.get("id")
+        elif not ok_sessions:
+            st.error(f"Unable to load sessions for filtering: {session_response}")
+        else:
+            st.error("Unable to load sessions for filtering: invalid response format.")
+        selected_session_label = st.selectbox(
+            "Session",
+            options=list(session_options.keys()),
+            key=f"ci_session_{course_filter or 'all'}",
+        )
+        session_filter = session_options[selected_session_label]
+
+        col_r1, col_r2, col_r3, col_r4 = st.columns(4)
         with col_r1:
             risk_range = st.slider(
                 "Risk Score Range",
@@ -86,6 +165,37 @@ def render() -> None:
             )
         with col_r2:
             student_search = st.text_input("Filter by Student ID (Optional)", placeholder="UUID of student")
+        with col_r3:
+            start_filter = st.date_input(
+                "Checked in from (SGT)",
+                value=None,
+                key="ci_start_date",
+            )
+        with col_r4:
+            end_filter = st.date_input(
+                "Checked in through (SGT)",
+                value=None,
+                key="ci_end_date",
+            )
+
+    if start_filter and end_filter and end_filter < start_filter:
+        st.error("The end date must be on or after the start date.")
+        return
+
+    filter_signature = (
+        course_filter,
+        status_param,
+        session_filter,
+        risk_range,
+        student_search.strip() if student_search else None,
+        start_filter,
+        end_filter,
+        page_limit,
+    )
+    if st.session_state.get("checkins_filter_signature") != filter_signature:
+        st.session_state["checkins_filter_signature"] = filter_signature
+        st.session_state["checkins_page"] = 0
+    page = st.session_state.get("checkins_page", 0)
 
     min_risk = risk_range[0]
     if status_filter == APPROVED_WITH_FLAG_OPTION:
@@ -96,20 +206,50 @@ def render() -> None:
         ok, res = api_client.list_checkins(
             token=token,
             course_id=course_filter,
+            session_id=session_filter,
             student_id=student_search.strip() if student_search else None,
             status=status_param,
             min_risk=min_risk,
             max_risk=risk_range[1],
             limit=page_limit,
-            offset=0,
+            offset=page * page_limit,
+            start_date=_utc_date_bound(start_filter) if start_filter else None,
+            end_date=_utc_date_bound(end_filter, end=True) if end_filter else None,
         )
 
     if not ok:
         st.error(f"Failed to fetch check-ins: {res}")
         return
 
-    items: List[Dict[str, Any]] = res.get("items", []) if isinstance(res, dict) else []
-    total = res.get("total", len(items)) if isinstance(res, dict) else len(items)
+    if not isinstance(res, dict) or not isinstance(res.get("items"), list):
+        st.error("Failed to fetch check-ins: invalid response format.")
+        return
+    items = res["items"]
+    total = res.get("total")
+    if (
+        not isinstance(total, int)
+        or isinstance(total, bool)
+        or total < 0
+        or any(not isinstance(item, dict) for item in items)
+    ):
+        st.error("Failed to fetch check-ins: invalid response data.")
+        return
+    page_count = max(1, (total + page_limit - 1) // page_limit)
+    nav_prev, nav_page, nav_next = st.columns([1, 3, 1])
+    with nav_prev:
+        if st.button("← Previous", disabled=page <= 0, key="checkins_prev"):
+            st.session_state["checkins_page"] = page - 1
+            st.rerun()
+    with nav_page:
+        st.caption(f"Page {page + 1} of {page_count}")
+    with nav_next:
+        if st.button(
+            "Next →",
+            disabled=page + 1 >= page_count,
+            key="checkins_next",
+        ):
+            st.session_state["checkins_page"] = page + 1
+            st.rerun()
 
     st.write(f"Showing **{len(items)}** of **{total}** total record(s):")
 
@@ -175,8 +315,24 @@ def render() -> None:
                 st.markdown(f"**Distance from Venue:** `{f'{dist:.1f} m' if dist is not None else 'N/A'}`")
                 liveness = detail_data.get("liveness_passed")
                 st.markdown(f"**Liveness Passed:** `{liveness}`")
+                st.markdown(
+                    f"**Liveness Score:** `{detail_data.get('liveness_score') if detail_data.get('liveness_score') is not None else 'N/A'}`"
+                )
+                st.markdown(
+                    f"**Face Match:** `{detail_data.get('face_match_passed') if detail_data.get('face_match_passed') is not None else 'N/A'}`"
+                )
+                st.markdown(
+                    f"**Face Match Score:** `{detail_data.get('face_match_score') if detail_data.get('face_match_score') is not None else 'N/A'}`"
+                )
                 device_trusted = detail_data.get("device_trusted")
                 st.markdown(f"**Device Trusted:** `{device_trusted}`")
+                latitude = detail_data.get("latitude")
+                longitude = detail_data.get("longitude")
+                st.markdown(
+                    f"**GPS Coordinates:** `{latitude}, {longitude}`"
+                    if latitude is not None and longitude is not None
+                    else "**GPS Coordinates:** `N/A`"
+                )
 
             # Risk factors
             r_factors = detail_data.get("risk_factors", [])
@@ -194,4 +350,3 @@ def render() -> None:
                     f"Notes: {detail_data.get('review_notes') or 'None'}",
                     icon="ℹ️",
                 )
-

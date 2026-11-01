@@ -16,6 +16,7 @@ duplicated.
 import argparse
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
 
@@ -83,13 +84,24 @@ class Seeder:
             "is_new": created.status_code == 201,
         }
 
+    def find_course(self) -> Optional[dict]:
+        # Test runs can leave hundreds of courses, so check every page.
+        offset = 0
+        while True:
+            page = self.http.get(
+                self.api + "/courses/", params={"limit": 100, "offset": offset}
+            ).json()
+            for row in page["items"]:
+                if row["code"] == COURSE_CODE:
+                    return row
+            offset += len(page["items"])
+            if not page["items"] or offset >= page["total"]:
+                return None
+
     def course(self, admin: dict, instructor: dict) -> dict:
-        existing = self.http.get(
-            self.api + "/courses/", params={"limit": 100}
-        ).json()["items"]
-        for row in existing:
-            if row["code"] == COURSE_CODE:
-                return row
+        existing = self.find_course()
+        if existing is not None:
+            return existing
 
         created = self.http.post(
             self.api + "/courses/",
@@ -106,6 +118,14 @@ class Seeder:
         if created.status_code != 201:
             raise SystemExit(f"Course creation failed: {created.text[:200]}")
         return created.json()
+
+    def assign_ta(self, admin: dict, ta_id: str, course_id: str) -> None:
+        # 409 means already assigned, which is fine on a re-run.
+        self.http.post(
+            f"{self.api}/courses/{course_id}/tas",
+            headers=admin["headers"],
+            json={"ta_id": ta_id},
+        )
 
     def enroll(self, admin: dict, student_id: str, course_id: str) -> None:
         # 400 means already enrolled, which is fine on a re-run.
@@ -193,6 +213,7 @@ def main() -> int:
     ]
 
     course = seeder.course(admin, instructor)
+    seeder.assign_ta(admin, ta["id"], course["id"])
     for student in students:
         seeder.enroll(admin, student["id"], course["id"])
 

@@ -6,10 +6,14 @@ and acknowledge check-ins that were approved with a flag (MEDIUM risk band or ab
 import math
 from numbers import Real
 from typing import Any, Dict, List, Optional
+import html
+
 import streamlit as st
 
 from app.api_client import api_client
-from app.auth import get_token
+from app.auth import get_current_user, get_token
+from app.access import load_visible_courses
+from app.rbac import Permission, require_permission
 from app.views._messages import set_flash_message
 from app.views._time import format_singapore_time
 
@@ -48,7 +52,10 @@ def _render_header(item: Dict[str, Any], badge_text: str, badge_color: str) -> N
     head_col1, head_col2 = st.columns([3, 1])
     with head_col1:
         st.markdown(
-            f"### {student_name} (`{student_email}`) — <span style='color:{badge_color}; font-size:1.1rem; font-weight:700;'>{badge_text}</span>",
+            f"<h3>{html.escape(str(student_name))} "
+            f"<small>({html.escape(str(student_email))})</small> — "
+            f"<span style='color:{badge_color}; font-size:1.1rem; "
+            f"font-weight:700;'>{badge_text}</span></h3>",
             unsafe_allow_html=True,
         )
         st.caption(f"Course: **{course_code}** | Session: **{session_name}** | Time: **{timestamp}**")
@@ -112,6 +119,8 @@ def _submit_review(
     flash_level: str = "success",
 ) -> None:
     """Post a review decision and rerun on success."""
+    if not require_permission(get_current_user(), Permission.REVIEW_FLAGGED_CHECKINS):
+        return
     with st.spinner(spinner_text):
         ok_rev, rev_res = api_client.review_checkin(
             token=token,
@@ -239,6 +248,11 @@ def _render_flag_card(item: Dict[str, Any], token: str) -> None:
 
 def render() -> None:
     """Render the Flagged & Appealed Check-ins Review Queue."""
+    user = get_current_user()
+    if not require_permission(
+        user, Permission.REVIEW_FLAGGED_CHECKINS
+    ):
+        return
     st.title("🚨 Flagged Check-ins Review Queue")
     st.caption("Review suspicious check-ins flagged by multi-signal risk heuristics, or student appeals.")
 
@@ -250,12 +264,27 @@ def render() -> None:
     # Filter controls
     col_f1, col_f2, col_btn = st.columns([2, 2, 1])
     with col_f1:
-        ok_courses, courses_data = api_client.list_courses(token=token)
-        course_map = {"All Courses": None}
-        if ok_courses and isinstance(courses_data, dict) and "items" in courses_data:
-            for c in courses_data["items"]:
-                course_map[f"{c.get('code')} - {c.get('name')}"] = c.get("id")
-        selected_course_label = st.selectbox("Filter by Course", options=list(course_map.keys()), key="rq_course_filter")
+        ok_courses, visible_courses, scope_message = load_visible_courses(
+            token, user
+        )
+        if not ok_courses:
+            st.error(scope_message or "Unable to load courses.")
+            return
+        course_map = {"All Courses": None} if user.get("role") == "admin" else {}
+        for course in visible_courses:
+            course_id = course.get("id")
+            if isinstance(course_id, str) and course_id:
+                course_map[
+                    f"{course.get('code')} - {course.get('name')}"
+                ] = course_id
+        if not course_map:
+            st.info(scope_message or "No assigned courses are available.")
+            return
+        selected_course_label = st.selectbox(
+            "Filter by Course",
+            options=list(course_map.keys()),
+            key="rq_course_filter",
+        )
         course_filter_id = course_map[selected_course_label]
 
     with col_f2:
@@ -272,11 +301,18 @@ def render() -> None:
         st.write("")
         st.button("🔄 Refresh Queue", key="btn_refresh_queue")
 
+    filter_signature = course_filter_id
+    if st.session_state.get("review_queue_filter_signature") != filter_signature:
+        st.session_state["review_queue_filter_signature"] = filter_signature
+        st.session_state["review_queue_page"] = 0
+    page = st.session_state.get("review_queue_page", 0)
+    page_limit = 50
     with st.spinner("Loading review queue..."):
         ok, res = api_client.get_flagged_checkins(
             token=token,
             course_id=course_filter_id,
-            limit=100,
+            limit=page_limit,
+            offset=page * page_limit,
         )
         ok_flag, flag_res = api_client.get_approved_flagged_checkins(
             token=token,
@@ -291,9 +327,25 @@ def render() -> None:
     )
     flag_total = flag_res.get("total", len(flag_items)) if ok_flag and isinstance(flag_res, dict) else 0
 
+    total = len(items)
+    if ok:
+        if not isinstance(res, dict) or not isinstance(res.get("items"), list):
+            st.error("Failed to load flagged check-ins: invalid response format.")
+            return
+        items = res["items"]
+        total = res.get("total")
+        if (
+            not isinstance(total, int)
+            or isinstance(total, bool)
+            or total < 0
+            or any(not isinstance(item, dict) for item in items)
+        ):
+            st.error("Failed to load flagged check-ins: invalid response data.")
+            return
+
     tab_decide, tab_flag = st.tabs(
         [
-            f"🚨 Needs decision ({len(items) if ok else '?'})",
+            f"🚨 Needs decision ({total if ok else '?'})",
             f"⚑ Approved with flag ({flag_total if ok_flag else '?'})",
         ]
     )
@@ -304,7 +356,23 @@ def render() -> None:
         elif not items:
             st.success("🎉 All clear! There are currently no flagged or appealed check-ins requiring review.")
         else:
-            st.markdown(f"Found **{len(items)}** check-in(s) requiring your decision:")
+            page_count = max(1, (total + page_limit - 1) // page_limit)
+            nav_prev, nav_page, nav_next = st.columns([1, 3, 1])
+            with nav_prev:
+                if st.button("← Previous", disabled=page <= 0, key="review_prev"):
+                    st.session_state["review_queue_page"] = page - 1
+                    st.rerun()
+            with nav_page:
+                st.caption(f"Page {page + 1} of {page_count} · {total} items to review")
+            with nav_next:
+                if st.button(
+                    "Next →",
+                    disabled=page + 1 >= page_count,
+                    key="review_next",
+                ):
+                    st.session_state["review_queue_page"] = page + 1
+                    st.rerun()
+            st.markdown(f"Found **{total}** check-in(s) requiring your decision:")
             for item in items:
                 _render_decision_card(item, token)
 

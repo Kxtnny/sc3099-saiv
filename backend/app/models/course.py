@@ -44,6 +44,9 @@ class Course(Base):
     sessions = relationship(
         "AttendanceSession", back_populates="course", cascade="all, delete-orphan"
     )
+    ta_assignments = relationship(
+        "CourseTA", back_populates="course", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Course {self.code}>"

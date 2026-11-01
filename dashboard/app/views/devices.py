@@ -35,7 +35,7 @@ def _trust_label(device: Dict[str, Any]) -> str:
 
 def _apply(token: str, device_id: str, changes: Dict[str, Any], message: str) -> None:
     """Send a device change and rerun on success."""
-    ok, result = api_client.update_device(token, device_id, changes)
+    ok, result = api_client.update_device(token, device_id, **changes)
     if ok:
         set_flash_message(message)
         st.rerun()

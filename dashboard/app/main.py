@@ -4,6 +4,7 @@ SAIV Instructor & Observability Dashboard - Module 4 Entrypoint
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Ensure the dashboard directory is on sys.path so 'app.*' imports resolve cleanly
 DASHBOARD_DIR = Path(__file__).resolve().parent.parent
@@ -14,8 +15,6 @@ import streamlit as st
 
 from app.api_client import api_client
 from app.auth import (
-    can_manage_devices,
-    can_view_audit,
     get_current_user,
     get_token,
     is_authenticated,
@@ -25,6 +24,7 @@ from app.auth import (
     sync_login_cookie,
 )
 from app.views import (
+    administration,
     audit,
     checkins,
     courses,
@@ -35,6 +35,16 @@ from app.views import (
     sessions,
 )
 from app.views._messages import render_flash_message
+from app.rbac import (
+    DASHBOARD_PAGE_PERMISSIONS,
+    Permission,
+    allowed_dashboard_pages,
+    has_permission,
+    require_permission,
+    resolve_dashboard_page,
+    role_for_user,
+)
+from app.views import session_checkins, student
 
 # Page configuration
 st.set_page_config(
@@ -61,6 +71,23 @@ st.markdown(
     .stButton button {
         border-radius: 6px;
     }
+    @media (max-width: 700px) {
+        .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        div[data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap;
+        }
+        div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+        div[data-testid="stDataFrame"] {
+            max-width: 100%;
+            overflow-x: auto;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -69,20 +96,28 @@ st.markdown(
 
 # Page names for the URL, so a browser reload stays on the same page.
 PAGE_SLUGS = {
+    "👤 My Attendance & Devices": "my-attendance",
     "📊 Overview": "overview",
     "📅 Sessions": "sessions",
+    "📋 Session Check-ins": "session-checkins",
     "🚨 Review Queue": "review-queue",
-    "📋 Check-in Explorer": "checkins",
     "🎓 Courses & Rosters": "courses",
+    "📋 Check-in Explorer": "checkins",
     "📱 Device Trust": "devices",
     "📜 Security Audit": "audit",
     "📈 Observability": "observability",
+    "🛠️ Administration": "administration",
 }
 
 
-def _page_slug(nav_option: str) -> str:
-    """URL name for a menu entry, ignoring any "(3)" count on its label."""
-    return PAGE_SLUGS.get(nav_option.split(" (")[0], "overview")
+def _page_slug(page: str) -> str:
+    """URL name for a menu entry."""
+    return PAGE_SLUGS.get(page, "overview")
+
+
+def _page_from_slug(slug: Optional[str]) -> Optional[str]:
+    """Menu entry for a URL name, or None for an unknown one."""
+    return next((page for page, value in PAGE_SLUGS.items() if value == slug), None)
 
 
 def main() -> None:
@@ -103,6 +138,56 @@ def main() -> None:
     # -------------------------------------------------------------------------
     token = get_token()
     user = get_current_user()
+    role = role_for_user(user)
+
+    if role is None:
+        with st.sidebar:
+            render_sidebar_user_profile()
+        st.error(
+            "Access denied. Your account has a missing or unrecognized dashboard role."
+        )
+        return
+
+    page_renderers = {
+        "👤 My Attendance & Devices": student.render,
+        "📊 Overview": overview.render,
+        "📅 Sessions": sessions.render,
+        "📋 Session Check-ins": session_checkins.render,
+        "🚨 Review Queue": review_queue.render,
+        "🎓 Courses & Rosters": courses.render,
+        "📋 Check-in Explorer": checkins.render,
+        "📱 Device Trust": devices.render,
+        "📜 Security Audit": audit.render,
+        "📈 Observability": observability.render,
+        "🛠️ Administration": administration.render,
+    }
+    page_definitions = [
+        (label, permission, page_renderers[label])
+        for label, permission in DASHBOARD_PAGE_PERMISSIONS.items()
+    ]
+    visible_pages = [
+        (label, permission, render)
+        for label, permission, render in page_definitions
+        if label in allowed_dashboard_pages(user)
+    ]
+    default_pages = {
+        "student": "👤 My Attendance & Devices",
+        "ta": "📋 Session Check-ins",
+        "instructor": "📊 Overview",
+        "admin": "📊 Overview",
+    }
+    allowed_page_labels = frozenset(label for label, _, _ in visible_pages)
+    if not allowed_page_labels:
+        st.error("Access denied. No dashboard pages are available for this role.")
+        return
+    # A browser reload empties session state, so fall back to the page in the URL.
+    requested_page = st.session_state.get("dashboard_page") or _page_from_slug(
+        st.query_params.get("page")
+    )
+    default_page = default_pages[role]
+    st.session_state["dashboard_page"] = resolve_dashboard_page(
+        requested_page, allowed_page_labels, default_page
+    )
 
     with st.sidebar:
         st.markdown(
@@ -111,52 +196,48 @@ def main() -> None:
                 <span style="font-size: 2rem;">🛡️</span>
                 <div>
                     <h2 style="margin: 0; font-size: 1.4rem; color: #1E3A8A;">SAIV</h2>
-                    <span style="font-size: 0.8rem; color: #6B7280; font-weight: 500;">INSTRUCTOR PORTAL</span>
+                    <span style="font-size: 0.8rem; color: #6B7280; font-weight: 500;">ROLE-BASED DASHBOARD</span>
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        # Check for pending flagged check-ins to show alert badge in menu
-        flagged_badge = ""
-        try:
-            ok_flag, flag_data = api_client.get_flagged_checkins(token=token, limit=1)
+        flagged_count = None
+        if (
+            role == "admin"
+            and has_permission(user, Permission.REVIEW_FLAGGED_CHECKINS)
+        ):
+            ok_flag, flag_data = api_client.get_flagged_checkins(
+                token=token, limit=1
+            )
             if ok_flag and isinstance(flag_data, dict):
-                flagged_count = flag_data.get("total", len(flag_data.get("items", [])))
-                if flagged_count > 0:
-                    flagged_badge = f" ({flagged_count})"
-        except Exception:
-            pass
+                total = flag_data.get("total")
+                items = flag_data.get("items")
+                if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+                    flagged_count = total
+                elif isinstance(items, list):
+                    flagged_count = len(items)
 
-        nav_options = [
-            "📊 Overview",
-            "📅 Sessions",
-            f"🚨 Review Queue{flagged_badge}",
-            "📋 Check-in Explorer",
-            "🎓 Courses & Rosters",
-        ]
-        if can_manage_devices(user):
-            nav_options.append("📱 Device Trust")
-        if can_view_audit(user):
-            nav_options.append("📜 Security Audit")
-        nav_options.append("📈 Observability")
+        nav_options = [label for label, _, _ in visible_pages]
 
-        requested_page = st.query_params.get("page")
         selected_page = st.radio(
             "Navigation",
             options=nav_options,
-            index=next(
-                (
-                    i
-                    for i, option in enumerate(nav_options)
-                    if _page_slug(option) == requested_page
-                ),
-                0,
+            format_func=lambda page: (
+                f"{page} ({flagged_count})"
+                if page == "🚨 Review Queue"
+                and flagged_count is not None
+                and flagged_count > 0
+                else page
             ),
             label_visibility="collapsed",
+            key="dashboard_page",
         )
         st.query_params["page"] = _page_slug(selected_page)
+        if flagged_count is None:
+            if role == "admin":
+                st.caption("Review queue count is currently unavailable.")
 
         # User profile & logout button at bottom of sidebar
         render_sidebar_user_profile()
@@ -164,22 +245,13 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # View Routing
     # -------------------------------------------------------------------------
-    if selected_page == "📊 Overview":
-        overview.render()
-    elif selected_page == "📅 Sessions":
-        sessions.render()
-    elif selected_page.startswith("🚨 Review Queue"):
-        review_queue.render()
-    elif selected_page == "📋 Check-in Explorer":
-        checkins.render()
-    elif selected_page == "🎓 Courses & Rosters":
-        courses.render()
-    elif selected_page == "📱 Device Trust":
-        devices.render()
-    elif selected_page == "📜 Security Audit":
-        audit.render()
-    elif selected_page == "📈 Observability":
-        observability.render()
+    selected_definition = next(
+        (item for item in visible_pages if item[0] == selected_page), None
+    )
+    if selected_definition is None:
+        st.error("Access denied. This dashboard page is not available to your role.")
+    elif require_permission(user, selected_definition[1]):
+        selected_definition[2]()
 
     if not is_authenticated():
         st.rerun()

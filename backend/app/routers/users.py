@@ -20,6 +20,7 @@ from app.core.utils import utcnow
 from app.dependencies import get_current_user, is_staff, paginate, require_admin
 from app.enums import AuditAction, UserRole
 from app.models import Course, Enrollment, User
+from app.services.authorization import has_course_access
 from app.schemas.common import PaginatedResponse
 from app.schemas.user import (
     FaceEnrollRequest,
@@ -41,23 +42,28 @@ def _can_view(viewer: User, target: User, db: Session) -> bool:
     Whether `viewer` may read `target`'s profile.
 
     Admins see everyone and users see themselves. Instructors and TAs see
-    students enrolled in a course they teach.
+    students enrolled in a course they own or are assigned to.
     """
     if viewer.role == UserRole.ADMIN.value or viewer.id == target.id:
         return True
 
+    if target.role != UserRole.STUDENT.value:
+        return False
+
     if is_staff(viewer):
-        shared = (
-            db.query(Enrollment.id)
-            .join(Course, Course.id == Enrollment.course_id)
+        enrolled_course_ids = [
+            course_id
+            for (course_id,) in db.query(Enrollment.course_id)
             .filter(
                 Enrollment.student_id == target.id,
                 Enrollment.is_active.is_(True),
-                Course.instructor_id == viewer.id,
             )
-            .first()
+            .all()
+        ]
+        return any(
+            has_course_access(db, viewer, course_id)
+            for course_id in enrolled_course_ids
         )
-        return shared is not None
 
     return False
 
