@@ -8,6 +8,7 @@ def decode_base64_image(data: str) -> np.ndarray:
     data = data.strip()
     try: raw = base64.b64decode(data)
     except ValueError as exc: raise ValueError("Invalid base64 encoding") from exc
+    if not raw: raise ValueError("Not a decodable image")
     buffer = np.frombuffer(raw, dtype=np.uint8)
     bgr = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
     if bgr is None: raise ValueError("Not a decodable image")

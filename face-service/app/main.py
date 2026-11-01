@@ -20,7 +20,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from app import __version__
 from app.config import Config
@@ -50,7 +50,7 @@ class FaceEnrollResponse(BaseModel):
 
 class FaceVerifyRequest(BaseModel):
     image: str
-    reference_template_hash: str
+    reference_template_hash: str = Field(validation_alias=AliasChoices("reference_template_hash", "reference_hash"))
 
 class FaceVerifyResponse(BaseModel):
     match_passed: bool
@@ -66,7 +66,7 @@ class LivenessChallengeResponse(BaseModel):
 
 class LivenessRequest(BaseModel):
     challenge_response: Optional[str] = None
-    challenge_type: str = "blink"
+    challenge_type: str = "passive"
     challenge_id: Optional[str] = None
     frames: Optional[List[str]] = None
 

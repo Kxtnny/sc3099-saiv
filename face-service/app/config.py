@@ -45,6 +45,8 @@ class Config:
     BLINK_EAR_BASELINE_RATIO = 0.93
     MOUTH_OPEN_MAR_THRESHOLD = 0.30
     HEAD_TURN_RATIO_THRESHOLD = 0.15
+    # Spread a measure must show across a sequence to count as movement.
+    LIVENESS_MIN_MOTION = 0.03
     TEXTURE_VARIANCE_SCALE = 500.0
     COLOR_STDDEV_SCALE = 60.0
 

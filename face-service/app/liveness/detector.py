@@ -150,7 +150,8 @@ class LivenessDetector:
     @staticmethod
     def _head_turn_sustained(ratios: List[float]) -> Tuple[bool, Dict[str, Any]]:
         triggered = sum(1 for r in ratios if r > Config.HEAD_TURN_RATIO_THRESHOLD)
-        return triggered >= Config.HEAD_TURN_MIN_FRAMES, {"max_ratio": round(max(ratios), 4) if ratios else 0.0, "turned_frames": triggered}
+        moved = bool(ratios) and max(ratios) - min(ratios) >= Config.LIVENESS_MIN_MOTION
+        return triggered >= Config.HEAD_TURN_MIN_FRAMES and moved, {"max_ratio": round(max(ratios), 4) if ratios else 0.0, "turned_frames": triggered}
 
     @staticmethod
     def _mouth_open_sustained(mars: List[float]) -> Tuple[bool, Dict[str, Any]]:
@@ -158,7 +159,8 @@ class LivenessDetector:
         for mar in mars:
             if mar > Config.MOUTH_OPEN_MAR_THRESHOLD: current += 1; longest = max(longest, current)
             else: current = 0
-        return longest >= Config.MOUTH_OPEN_MIN_FRAMES, {"max_mar": round(max(mars), 4) if mars else 0.0, "open_frames": longest}
+        moved = bool(mars) and max(mars) - min(mars) >= Config.LIVENESS_MIN_MOTION
+        return longest >= Config.MOUTH_OPEN_MIN_FRAMES and moved, {"max_mar": round(max(mars), 4) if mars else 0.0, "open_frames": longest}
 
     @staticmethod
     def _passive_blink(ears: List[float]) -> Tuple[bool, Dict[str, Any]]:

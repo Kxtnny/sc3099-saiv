@@ -12,18 +12,18 @@ processors:
     send_batch_size: 1024
 
 exporters:
-  logging:
-    loglevel: debug
+  debug:
+    verbosity: basic
   prometheus:
-    endpoint: "0.0.0.0:8888"
+    endpoint: "0.0.0.0:8889"
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [logging]
+      exporters: [debug]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [prometheus, logging]
+      exporters: [prometheus, debug]
