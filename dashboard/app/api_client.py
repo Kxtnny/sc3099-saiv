@@ -364,6 +364,7 @@ class APIClient:
         session_id: Optional[str] = None,
         course_id: Optional[str] = None,
         student_id: Optional[str] = None,
+        search: Optional[str] = None,
         status: Optional[str] = None,
         min_risk: Optional[float] = None,
         max_risk: Optional[float] = None,
@@ -381,6 +382,8 @@ class APIClient:
             params["course_id"] = course_id
         if student_id:
             params["student_id"] = student_id
+        if search:
+            params["search"] = search
         if status:
             params["status"] = status
         if min_risk is not None:

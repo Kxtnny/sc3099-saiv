@@ -460,3 +460,72 @@ def test_approved_flagged_list_is_limited_to_the_callers_courses(db):
 )
 def test_device_name_comes_from_the_user_agent(user_agent, expected):
     assert devices_router.describe_user_agent(user_agent) == expected
+
+
+def _searchable_checkins(db):
+    owner = _user(db, UserRole.INSTRUCTOR.value, "search-owner")
+    other = _user(db, UserRole.INSTRUCTOR.value, "search-other")
+    alice = _user(db, UserRole.STUDENT.value, "alice")
+    bob = _user(db, UserRole.STUDENT.value, "bob")
+    course = _course(db, "SEARCH", owner)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    session = AttendanceSession(
+        id="session-search",
+        course_id=course.id,
+        instructor_id=owner.id,
+        name="Lecture",
+        session_type="lecture",
+        status=SessionStatus.ACTIVE.value,
+        scheduled_start=now,
+        scheduled_end=now + timedelta(hours=1),
+        checkin_opens_at=now,
+        checkin_closes_at=now + timedelta(minutes=30),
+    )
+    db.add(session)
+    for student in (alice, bob):
+        db.add(
+            CheckIn(
+                id=f"checkin-{student.id}",
+                session_id=session.id,
+                student_id=student.id,
+                status=CheckInStatus.APPROVED.value,
+                risk_score=0.1,
+            )
+        )
+    db.flush()
+    return owner, other, alice, bob
+
+
+def _search(db, user, term):
+    return checkins_router.list_checkins(
+        session_id=None,
+        course_id=None,
+        student_id=None,
+        search=term,
+        status_filter=None,
+        min_risk_score=None,
+        max_risk_score=None,
+        start_date=None,
+        end_date=None,
+        limit=50,
+        offset=0,
+        _staff=user,
+        db=db,
+    )
+
+
+def test_checkins_can_be_searched_by_student_name_or_email(db):
+    owner, _, alice, bob = _searchable_checkins(db)
+
+    assert _search(db, owner, None)["total"] == 2
+    assert _search(db, owner, "   ")["total"] == 2
+    assert [i.student_id for i in _search(db, owner, "ALICE")["items"]] == [alice.id]
+    assert [i.student_id for i in _search(db, owner, "bob@example")["items"]] == [bob.id]
+    assert _search(db, owner, "nobody")["total"] == 0
+    assert _search(db, owner, "%")["total"] == 0
+
+
+def test_checkin_search_stays_within_the_callers_courses(db):
+    _, other, _, _ = _searchable_checkins(db)
+
+    assert _search(db, other, "alice")["total"] == 0

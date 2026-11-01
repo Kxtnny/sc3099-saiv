@@ -592,6 +592,7 @@ List all check-ins with filters. **Requires auth (instructor/admin).**
 | `session_id` | uuid | - | Filter by session |
 | `course_id` | uuid | - | Filter by course |
 | `student_id` | uuid | - | Filter by student |
+| `search` | string | - | Part of the student's name or email, ignoring case |
 | `status` | string | - | Filter by status (pending\|approved\|flagged\|rejected\|appealed) |
 | `min_risk_score` | float | - | Minimum risk score |
 | `max_risk_score` | float | - | Maximum risk score |

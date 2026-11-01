@@ -164,7 +164,11 @@ def render() -> None:
                 key="ci_risk_slider",
             )
         with col_r2:
-            student_search = st.text_input("Filter by Student ID (Optional)", placeholder="UUID of student")
+            student_search = st.text_input(
+                "Search student name or email",
+                placeholder="Type to search...",
+                key="ci_student_search",
+            )
         with col_r3:
             start_filter = st.date_input(
                 "Checked in from (SGT)",
@@ -207,7 +211,7 @@ def render() -> None:
             token=token,
             course_id=course_filter,
             session_id=session_filter,
-            student_id=student_search.strip() if student_search else None,
+            search=student_search.strip() if student_search else None,
             status=status_param,
             min_risk=min_risk,
             max_risk=risk_range[1],
@@ -262,7 +266,7 @@ def render() -> None:
     for c in items:
         table_rows.append(
             {
-                "ID": c.get("id", "")[:8],
+                "Check-in ID": c.get("id", "")[:8],
                 "Student": c.get("student_name") or c.get("student_email", "N/A"),
                 "Email": c.get("student_email", "N/A"),
                 "Course": c.get("course_code", "N/A"),

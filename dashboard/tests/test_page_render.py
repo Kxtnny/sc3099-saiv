@@ -256,3 +256,48 @@ def test_unlisted_current_instructor_stays_selected(monkeypatch):
     _save_course(app)
 
     assert "instructor_id" not in update_course.call_args.args[2]
+
+
+def _render_checkin_explorer():
+    from app.views import checkins
+
+    checkins.render()
+
+
+def test_checkin_explorer_searches_by_student_and_labels_the_check_in_id(monkeypatch):
+    list_checkins = Mock(
+        return_value=(
+            True,
+            {
+                "items": [
+                    {
+                        "id": "b18e9037-0000",
+                        "student_name": "Demo Student 1",
+                        "student_email": "student1@demo.ntu",
+                        "status": "approved",
+                        "risk_score": 0.15,
+                    }
+                ],
+                "total": 1,
+            },
+        )
+    )
+    monkeypatch.setattr(api_client, "list_checkins", list_checkins)
+    monkeypatch.setattr(api_client, "get_checkin", Mock(return_value=(False, "unused")))
+    monkeypatch.setattr(
+        api_client, "list_courses", Mock(return_value=(True, {"items": [COURSE], "total": 1}))
+    )
+    monkeypatch.setattr(
+        api_client, "list_sessions", Mock(return_value=(True, {"items": [SESSION], "total": 1}))
+    )
+
+    app = AppTest.from_function(_render_checkin_explorer)
+    app.session_state["access_token"] = "access-token"
+    app.session_state["user"] = {"id": "instructor-id", "role": "instructor"}
+    app.session_state["ci_student_search"] = "  student1 "
+    app.run()
+
+    assert not app.exception
+    assert list_checkins.call_args.kwargs["search"] == "student1"
+    assert "student_id" not in list_checkins.call_args.kwargs
+    assert "Check-in ID" in app.dataframe[0].value.columns

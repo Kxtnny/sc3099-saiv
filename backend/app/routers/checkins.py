@@ -17,13 +17,14 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Query as OrmQuery, Session, joinedload
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.metrics import record_checkin_decision
-from app.core.sanitize import sanitize_text
+from app.core.sanitize import escape_like, sanitize_text
 from app.core.utils import utcnow
 from app.dependencies import (
     get_current_user,
@@ -900,6 +901,7 @@ def list_checkins(
     session_id: Optional[str] = None,
     course_id: Optional[str] = None,
     student_id: Optional[str] = None,
+    search: Optional[str] = Query(default=None, max_length=255),
     status_filter: Optional[CheckInStatus] = Query(default=None, alias="status"),
     min_risk_score: Optional[float] = Query(default=None, ge=0.0, le=1.0),
     max_risk_score: Optional[float] = Query(default=None, ge=0.0, le=1.0),
@@ -920,6 +922,11 @@ def list_checkins(
     query = _scope_to_staff(db, _staff, query, course_id, session_id)
     if student_id:
         query = query.filter(CheckIn.student_id == student_id)
+    if search and search.strip():
+        term = f"%{escape_like(search.strip())}%"
+        query = query.join(User, User.id == CheckIn.student_id).filter(
+            or_(User.full_name.ilike(term), User.email.ilike(term))
+        )
     if status_filter is not None:
         query = query.filter(CheckIn.status == status_filter.value)
     if min_risk_score is not None:
