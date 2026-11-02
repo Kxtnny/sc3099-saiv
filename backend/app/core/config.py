@@ -70,10 +70,10 @@ class Settings(BaseSettings):
     # CRITICAL band (SECURITY-REQUIREMENTS.md): auto-reject at or above this.
     RISK_REJECT_THRESHOLD: float = 0.7
     LIVENESS_THRESHOLD: float = 0.6
-    # Clean-pass cutoff. The face service rejects below its own 0.62; scores
-    # from there up to this are flagged for review. The 0.05 gap covers
-    # SimHash noise (about +/-0.03 at 256 bits).
-    FACE_MATCH_THRESHOLD: float = 0.67
+    # Clean-pass cutoff. The face service rejects below its own 0.70; scores
+    # from there up to this are flagged for review, so an instructor decides
+    # on a near miss instead of the system approving or rejecting it outright.
+    FACE_MATCH_THRESHOLD: float = 0.78
     DEFAULT_GEOFENCE_RADIUS_METERS: float = 100.0
 
     # -- Rate limiting -------------------------------------------------------

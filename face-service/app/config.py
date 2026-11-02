@@ -10,9 +10,9 @@ class Config:
     SIMHASH_BITS = 256
     SIMHASH_SEED = 0x5A17
     
-    # 0.78 in SimHash space roughly corresponds to an ArcFace cosine similarity 
-    # of ~0.60, which is the correct 1:1 verification threshold.
-    FACE_MATCH_THRESHOLD = 0.78
+    # SimHash similarity estimates 1 - angle/pi, so 0.70 is an ArcFace cosine
+    # of about 0.59. API-SPECIFICATION.md fixes match_passed at >= 0.70.
+    FACE_MATCH_THRESHOLD = 0.70
 
     ARCFACE_MODEL_PACK = "buffalo_l"
     ARCFACE_MODEL_ROOT = os.getenv("INSIGHTFACE_ROOT", "~/.insightface")
@@ -22,6 +22,10 @@ class Config:
     # photos can fool MediaPipe's 3D estimation. Specular, frequency, and gamut 
     # are the real anti-spoofs.
     LIVENESS_THRESHOLD = 0.80
+    # A recorded challenge must also show the requested action, so its image
+    # score only has to rule out a poor capture. Live webcam frames score
+    # about 0.79-0.81 with the action bonus, too close to the 0.80 above.
+    LIVENESS_SEQUENCE_THRESHOLD = 0.70
     LIVENESS_DEPTH_WEIGHT = 0.10
     LIVENESS_MESH_WEIGHT = 0.10
     LIVENESS_TEXTURE_WEIGHT = 0.20
@@ -41,6 +45,8 @@ class Config:
     BLINK_EAR_BASELINE_RATIO = 0.93
     MOUTH_OPEN_MAR_THRESHOLD = 0.30
     HEAD_TURN_RATIO_THRESHOLD = 0.15
+    # Spread a measure must show across a sequence to count as movement.
+    LIVENESS_MIN_MOTION = 0.03
     TEXTURE_VARIANCE_SCALE = 500.0
     COLOR_STDDEV_SCALE = 60.0
 

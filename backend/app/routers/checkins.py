@@ -13,7 +13,7 @@ itself is never written to the database, the logs, or the response.
 import json
 import logging
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -592,6 +592,31 @@ def create_checkin(
                     details=unavailable,
                     needs_review=True,
                 )
+    elif session.require_face_match and current_user.face_embedding_hash:
+        assessment.add(
+            SignalType.FACE_MATCH_LOW_CONFIDENCE,
+            details={"reason": "no_face_frame_submitted"},
+            needs_review=True,
+        )
+
+    # -- Replay --------------------------------------------------------------
+    # Two live captures differ in many SimHash bits, so an exact repeat of a
+    # template from an earlier check-in is the same image submitted again.
+    if face_hash:
+        repeated = (
+            db.query(CheckIn.id)
+            .filter(
+                CheckIn.student_id == current_user.id,
+                CheckIn.face_embedding_hash == face_hash,
+            )
+            .first()
+        )
+        if repeated is not None:
+            assessment.add(
+                SignalType.REPLAY_SUSPECTED,
+                details={"repeat_of": repeated.id},
+                needs_review=True,
+            )
 
     # -- Network (face service second opinion) ------------------------------
     # Module 3 owns VPN/proxy detection. Only its network component is taken:
@@ -905,8 +930,8 @@ def list_checkins(
     status_filter: Optional[CheckInStatus] = Query(default=None, alias="status"),
     min_risk_score: Optional[float] = Query(default=None, ge=0.0, le=1.0),
     max_risk_score: Optional[float] = Query(default=None, ge=0.0, le=1.0),
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _staff: User = Depends(require_staff),
