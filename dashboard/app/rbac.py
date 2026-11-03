@@ -104,10 +104,12 @@ def allowed_dashboard_pages(
     user: Optional[Dict[str, Any]],
 ) -> FrozenSet[str]:
     """Return navigation pages allowed for the authenticated role."""
+    role = role_for_user(user)
     return frozenset(
         page
         for page, permission in DASHBOARD_PAGE_PERMISSIONS.items()
         if has_permission(user, permission)
+        and (page != "👤 My Attendance & Devices" or role == "student")
     )
 
 

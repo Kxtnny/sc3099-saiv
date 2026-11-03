@@ -120,7 +120,9 @@ def render() -> None:
     if not isinstance(checkins, list):
         st.error("Unable to load session check-ins: invalid response format.")
         return
-    if not checkins:
+
+    valid_checkins = [item for item in checkins if isinstance(item, dict)]
+    if not valid_checkins:
         st.info("No check-ins have been recorded for this session.")
         return
 
@@ -138,8 +140,17 @@ def render() -> None:
                 else "N/A"
             ),
         }
-        for item in checkins
-        if isinstance(item, dict)
+        for item in valid_checkins
     ]
     st.write(f"Showing **{len(rows)}** check-in(s).")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    dataframe = pd.DataFrame(
+        rows,
+        columns=[
+            "Student",
+            "Status",
+            "Checked in at",
+            "Risk score",
+            "Liveness",
+        ],
+    )
+    st.dataframe(dataframe, use_container_width=True, hide_index=True)

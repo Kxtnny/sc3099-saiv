@@ -176,11 +176,14 @@ def render() -> None:
             filter_course_id = course_map[selected_course_label]
 
         with col_f3:
-            instructor_id = st.text_input(
-                "Instructor ID",
-                placeholder="Optional instructor UUID",
-                key="sessions_instructor_filter",
-            ).strip()
+            if role_for_user(user) == "admin":
+                instructor_id = st.text_input(
+                    "Instructor ID",
+                    placeholder="Optional instructor UUID",
+                    key="sessions_instructor_filter",
+                ).strip()
+            else:
+                instructor_id = ""
         with col_f4:
             st.button("🔄 Refresh", key="btn_refresh_sessions")
 
